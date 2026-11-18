@@ -92,8 +92,10 @@ Uploader menunggu sampai waktu `publish_at` sebelum mengirim video ke YouTube. J
 2. Pilih tab **Actions**.
 3. Pilih **Mesin Cuan - Produksi Video**.
 4. Tekan **Run workflow**.
-5. Pilih satu channel, masukkan topik, pilih format, lalu jalankan.
-6. Buka log workflow. Setelah pipeline berhasil, periksa folder antrean Google Drive.
+5. Pilih satu channel, masukkan topik, pilih format.
+6. Untuk uji awal tanpa upload ke Drive, aktifkan **dry_run**. Mode ini tetap membuat/render video tetapi tidak membutuhkan token OAuth channel.
+7. Untuk integrasi Drive sebenarnya, matikan **dry_run** dan pastikan Secret OAuth channel terpilih sudah diisi.
+8. Buka log workflow. Setelah pipeline berhasil, periksa folder antrean Google Drive.
 7. Pastikan layanan uploader berstatus sehat dan log menunjukkan antrean diproses.
 8. Buka YouTube Studio dan periksa video uji yang seharusnya berstatus private.
 

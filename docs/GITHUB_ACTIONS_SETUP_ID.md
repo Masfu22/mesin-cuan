@@ -1,120 +1,95 @@
-# Setup otomatis Mesin Cuan → Google Drive → YouTube
+# Setup aman Mesin Cuan → Google Drive → YouTube
 
-Dokumen ini menjelaskan dua komponen yang bekerja bersama:
+Dokumen ini menjelaskan dua komponen:
+- Producer: https://github.com/Masfu22/mesin-cuan
+- Uploader: https://github.com/Masfu22/mesin-cuan-uploader
 
-- Producer: [Masfu22/mesin-cuan](https://github.com/Masfu22/mesin-cuan)
-- Uploader: [Masfu22/mesin-cuan-uploader](https://github.com/Masfu22/mesin-cuan-uploader)
-
-## 1. Alur kerja
+## 1. Alur integrasi
 
 1. Jalankan workflow **Mesin Cuan - Produksi Video** dari tab Actions.
 2. Pilih satu channel, isi topik, dan pilih Shorts atau Long Form.
-3. GitHub Actions menjalankan pipeline: script → TTS → footage → render → thumbnail/metadata → QC.
-4. Mesin Cuan mengirim `video.mp4`, `thumbnail.png` (jika ada), dan `metadata.json` ke Google Drive.
-5. Uploader memeriksa antrean tiap 5 menit, menunggu `publish_at`, lalu mengunggah ke channel YouTube yang sesuai.
-6. Setelah upload berhasil, folder antrean dipindahkan ke folder `done`.
+3. GitHub Actions menjalankan pipeline produksi.
+4. Producer mengirim video, thumbnail opsional, dan metadata ke Google Drive queue.
+5. Uploader di Railway membaca antrean dengan token channel yang sama.
+6. Uploader mengunggah ke channel YouTube yang cocok, lalu mengarsipkan job ke folder done.
 
-Struktur antrean:
+## 2. Pemisahan rahasia
 
-```text
-mesin_cuan/
-  queue/
-    <channel_id>/
-      <job_id>/
-        video.mp4
-        thumbnail.png
-        metadata.json
-  done/
-    <channel_id>/
-```
+**Jangan pernah menaruh credential di source code, file yang di-commit, issue, log, screenshot, atau chat.** Nilai rahasia harus dimasukkan langsung melalui halaman pengaturan masing-masing layanan.
 
-Mesin Cuan membuat folder `mesin_cuan/queue/<channel_id>/<job_id>/` otomatis di Google Drive milik akun OAuth channel tersebut. Uploader menggunakan token channel yang sama untuk membaca antrean dan mengunggah ke channel YouTube yang sama.
+### GitHub Actions — repository Producer
 
-## 2. GitHub Actions Secrets di repository Mesin Cuan
-
-Buka **Masfu22/mesin-cuan → Settings → Secrets and variables → Actions**. Tambahkan secrets berikut. Isi hanya API/provider yang memang dipakai.
+Buka repository Masfu22/mesin-cuan → Settings → Secrets and variables → Actions. Tambahkan hanya secrets yang memang digunakan:
 
 | Secret | Kegunaan |
 |---|---|
-| `TOKEN_CH_ID_HORROR` | OAuth JSON untuk channel ch_id_horror |
-| `TOKEN_CH_ID_PSYCH` | OAuth JSON untuk channel ch_id_psych |
-| `TOKEN_CH_EN_HORROR` | OAuth JSON untuk channel ch_en_horror |
-| `TOKEN_CH_EN_PSYCH` | OAuth JSON untuk channel ch_en_psych |
-| `GEMINI_API_KEY` atau `GROQ_API_KEY` atau provider AI lain | Generate naskah/QC sesuai konfigurasi |
-| `PEXELS_API_KEY` | Footage; Pixabay/Coverr dapat menjadi fallback |
-| `YOUTUBE_API_KEY` | Riset/topik YouTube jika fitur tersebut digunakan |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Notifikasi, opsional |
-| `ELEVENLABS_API_KEY` | TTS premium, opsional |
-| `PIXABAY_API_KEY`, `COVERR_API_KEY`, `COVERR_APP_ID`, `FREESOUND_API_KEY` | Provider footage/audio tambahan, opsional |
-| `PROVIDER_A_API_KEY`, `PROVIDER_A_BASE_URL`, `PROVIDER_A_MODEL` | Provider AI A, opsional sesuai konfigurasi |
-| `PROVIDER_B_API_KEY`, `PROVIDER_B_BASE_URL`, `PROVIDER_B_MODEL` | Provider AI B, opsional sesuai konfigurasi |
-| `ANTHROPIC_API_KEY`, `NVIDIA_API_KEY`, `PERPLEXITY_API_KEY` | Provider tambahan, opsional |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Opsional untuk komponen yang membaca variabel ini; OAuth token channel tetap harus lengkap |
+| TOKEN_CH_ID_HORROR | OAuth authorized-user JSON channel ch_id_horror |
+| TOKEN_CH_ID_PSYCH | OAuth authorized-user JSON channel ch_id_psych |
+| TOKEN_CH_EN_HORROR | OAuth authorized-user JSON channel ch_en_horror |
+| TOKEN_CH_EN_PSYCH | OAuth authorized-user JSON channel ch_en_psych |
+| GEMINI_API_KEY / provider AI aktif | Pembuatan naskah dan QC sesuai konfigurasi |
+| PEXELS_API_KEY | Footage utama |
+| YOUTUBE_API_KEY | Riset/topik YouTube jika dipakai |
+| TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID | Notifikasi opsional |
+| Provider lain | Isi hanya jika fitur/provider tersebut digunakan |
 
-Token OAuth yang digunakan harus berupa authorized-user JSON yang berisi `refresh_token`, `token_uri`, `client_id`, `client_secret`, dan scope yang sesuai. Jangan masukkan token atau API key ke source code, issue, log, atau chat.
+OAuth token harus berupa JSON authorized-user yang memiliki refresh_token, token_uri, client_id, client_secret, dan scope yang dibutuhkan. Token yang sama untuk channel yang sama perlu dimasukkan secara terpisah ke Railway; GitHub Secrets tidak otomatis tersinkron ke Railway.
 
-Scope minimum yang diperlukan:
-- `https://www.googleapis.com/auth/youtube.upload`
-- `https://www.googleapis.com/auth/drive.file`
+### Railway — repository Uploader
 
-Buat token untuk setiap akun/channel dengan `python setup_auth.py`. Pastikan token tiap channel memang berasal dari akun YouTube dan Google Drive yang tepat. Script setup menghasilkan file JSON; gunakan isi JSON sebagai GitHub Secret. Jangan gunakan file pickle lama.
-
-Catatan: `engine/gdrive_engine.py` membuat folder root berdasarkan nama `mesin_cuan`; variabel `GOOGLE_DRIVE_FOLDER_ID` tidak dipakai oleh implementasi antrean saat ini.
-
-## 3. Environment secrets di hosting uploader
-
-Deploy repository **Masfu22/mesin-cuan-uploader** sebagai Docker web service di Koyeb atau Railway. Lalu tambahkan environment variables di halaman layanan hosting itu sendiri (bukan hanya di repository Mesin Cuan):
+Buka Railway → service Uploader → Variables. Tambahkan:
 
 | Variable | Nilai |
 |---|---|
-| `TOKEN_CH_ID_HORROR` | OAuth JSON channel ch_id_horror |
-| `TOKEN_CH_ID_PSYCH` | OAuth JSON channel ch_id_psych |
-| `TOKEN_CH_EN_HORROR` | OAuth JSON channel ch_en_horror |
-| `TOKEN_CH_EN_PSYCH` | OAuth JSON channel ch_en_psych |
-| `YOUTUBE_PRIVACY_STATUS` | Mulai dengan `private`; pilih `unlisted` atau `public` hanya setelah uji berhasil |
-| `POLL_INTERVAL_SEC` | Opsional; default 300 detik |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Opsional untuk notifikasi |
-| `PORT` | Opsional; default 8080 |
+| TOKEN_CH_ID_HORROR | OAuth JSON untuk channel tersebut |
+| TOKEN_CH_ID_PSYCH | OAuth JSON untuk channel tersebut |
+| TOKEN_CH_EN_HORROR | OAuth JSON untuk channel tersebut |
+| TOKEN_CH_EN_PSYCH | OAuth JSON untuk channel tersebut |
+| YOUTUBE_PRIVACY_STATUS | Mulai dari private |
+| POLL_INTERVAL_SEC | Opsional, default 300 |
+| TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID | Opsional |
+| PORT | Biarkan Railway mengatur; aplikasi default 8080 jika tidak disediakan |
 
-Channel yang tokennya belum diisi akan dilewati. Gunakan token yang sama dengan GitHub Secret untuk channel tersebut. Jangan menaruh token di file yang di-commit.
+Channel yang tokennya belum tersedia akan dilewati. Jangan memasukkan API key Gemini ke Uploader; Gemini dipakai oleh Producer, bukan oleh proses upload.
 
-**Penting:** Secrets di repository Mesin Cuan tidak otomatis tersedia di Koyeb/Railway. Kamu perlu mengisi variabel token secara terpisah pada pengaturan environment layanan uploader.
+## 3. Membuat OAuth token dari Android
 
-## 4. Privasi dan jadwal publikasi
+1. Buat project Google Cloud dan aktifkan YouTube Data API v3 serta Google Drive API.
+2. Atur OAuth consent screen. Jika aplikasi masih Testing, tambahkan akun Google channel sebagai test user.
+3. Buat OAuth Client ID tipe Desktop app, lalu unduh JSON.
+4. Di Termux, tempatkan file client JSON sesuai nama channel, misalnya config/secrets/ch_id_horror_secret.json.
+5. Jalankan:
+   ```bash
+   python setup_auth.py --channel ch_id_horror
+   ```
+6. Selesaikan login Google di browser. Token tersimpan di config/credentials/ch_id_horror_v2.json.
+7. Buka file token itu secara lokal di perangkat dan salin seluruh JSON langsung ke secret TOKEN_CH_ID_HORROR pada GitHub dan variable bernama sama di Railway. Jangan kirim JSON ke chat.
+8. Ulangi satu channel per satu channel setelah channel pertama berhasil diuji.
 
-Uploader sekarang default ke `private`. Ini aman untuk uji pertama. Untuk mempublikasikan video secara otomatis setelah waktu `publish_at`, ubah `YOUTUBE_PRIVACY_STATUS=public` pada hosting uploader. Pengaturan berlaku untuk semua channel pada layanan tersebut.
+Scope yang digunakan oleh setup script:
+- https://www.googleapis.com/auth/youtube.upload
+- https://www.googleapis.com/auth/yt-analytics.readonly
+- https://www.googleapis.com/auth/drive.file
 
-Uploader menunggu sampai waktu `publish_at` sebelum mengirim video ke YouTube. Jika `publish_at` kosong, antrean yang berstatus `ready` dapat langsung diproses. Jika format `publish_at` tidak valid, antrean dilewati agar tidak terbit terlalu cepat.
+File client dan token berada di direktori yang diabaikan Git oleh .gitignore. Jangan menghapus aturan ignore tersebut.
 
-## 5. Menjalankan dari HP
+## 4. Uji bertahap
 
-1. Buka repository [Masfu22/mesin-cuan](https://github.com/Masfu22/mesin-cuan).
-2. Pilih tab **Actions**.
-3. Pilih **Mesin Cuan - Produksi Video**.
-4. Tekan **Run workflow**.
-5. Pilih satu channel, masukkan topik, pilih format.
-6. Untuk uji awal tanpa upload ke Drive, aktifkan **dry_run**. Mode ini tetap membuat/render video tetapi tidak membutuhkan token OAuth channel.
-7. Untuk integrasi Drive sebenarnya, matikan **dry_run** dan pastikan Secret OAuth channel terpilih sudah diisi.
-8. Buka log workflow. Setelah pipeline berhasil, periksa folder antrean Google Drive.
-7. Pastikan layanan uploader berstatus sehat dan log menunjukkan antrean diproses.
-8. Buka YouTube Studio dan periksa video uji yang seharusnya berstatus private.
+1. Jalankan workflow dengan dry_run=true untuk memastikan runner dan pipeline bisa mulai tanpa OAuth/Drive.
+2. Untuk tes integrasi, isi token satu channel di GitHub Secrets dan Railway Variables.
+3. Jalankan workflow dengan dry_run=false. Periksa apakah job muncul di Google Drive mesin_cuan/queue/<channel_id>/.
+4. Pastikan Railway log menunjukkan channel aktif dan antrean dibaca.
+5. Uploader default mengunggah sebagai private. Periksa video di YouTube Studio.
+6. Jangan ubah ke public sebelum video uji private dan metadata diperiksa.
 
-## 6. Pemeriksaan sebelum produksi
+## 5. Privasi, log, dan pemulihan
 
-- Mulai dengan satu video Shorts dan satu channel.
-- Pastikan token Google untuk channel itu memiliki scope YouTube Upload dan Drive file.
-- Pastikan layanan uploader berjalan dan token channel yang sama sudah dipasang di hosting.
-- Periksa video, thumbnail, judul, deskripsi, hak penggunaan footage/audio, serta deklarasi konten sintetis.
-- Jangan ubah privasi menjadi public sebelum tes private berhasil.
-- Runner GitHub Actions bersifat sementara dan tidak memiliki GPU khusus. Render long-form dapat memakan waktu dan memori.
-- Jika upload YouTube sukses tetapi pemindahan folder ke `done` gagal, periksa YouTube Studio sebelum mengulang antrean untuk menghindari duplikasi.
+- Jangan mencetak environment variable rahasia ke log.
+- Jangan mengirim OAuth JSON, API key, atau Base64 token ke chat.
+- Jika credential pernah terekspos, cabut/rotasi di penyedia terkait sebelum dipakai lagi.
+- Jalankan satu replica Uploader agar dua poller tidak memproses antrean yang sama.
+- Jika upload sukses tetapi arsip Drive gagal, periksa YouTube Studio sebelum mengulang job.
 
-## 7. Status verifikasi
+## 6. Status verifikasi
 
-Kode integrasi dan kontrak folder antrean sudah diselaraskan. Workflow validasi uploader menjalankan pemeriksaan sintaks dan unit test saat ada push/PR. Namun, integrasi layanan eksternal belum dapat dinyatakan berhasil sampai:
-- GitHub Actions berhasil menghasilkan satu video;
-- video dan metadata terlihat pada Google Drive queue;
-- uploader membaca antrean dengan OAuth yang benar;
-- video uji muncul pada channel YouTube yang sesuai.
-
-Tes terakhir memerlukan secrets dan akses Google milik pemilik akun. Jangan mengirim secrets ke chat.
+Perubahan kode dan konfigurasi tidak sama dengan keberhasilan upload langsung. Integrasi baru dapat dinyatakan lolos setelah workflow GitHub Actions sukses, file queue terlihat di Drive, Railway membaca queue dengan OAuth yang benar, dan video uji private terlihat di channel YouTube yang tepat.

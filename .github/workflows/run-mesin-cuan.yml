@@ -1,0 +1,175 @@
+name: Mesin Cuan - Produksi Video
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Channel produksi
+        required: true
+        type: choice
+        options:
+          - ch_id_horror
+          - ch_horror_id
+          - ch_id_psych
+          - ch_en_horror
+          - ch_en_psych
+      topic:
+        description: Topik video (wajib diisi)
+        required: true
+        type: string
+      profile:
+        description: Format video
+        required: true
+        type: choice
+        default: shorts
+        options:
+          - shorts
+          - long_form
+      skip_qc:
+        description: Lewati pemeriksaan QC (tidak disarankan)
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mesin-cuan-production
+  cancel-in-progress: false
+
+jobs:
+  produce:
+    name: Generate, render, and queue video
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    env:
+      PYTHONUNBUFFERED: "1"
+      TTS_MODE: edge
+      RENDER_PRESET: fast
+      LOG_LEVEL: INFO
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install FFmpeg and system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libsndfile1
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare environment and Google OAuth token
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          PROVIDER_A_API_KEY: ${{ secrets.PROVIDER_A_API_KEY }}
+          PROVIDER_A_BASE_URL: ${{ secrets.PROVIDER_A_BASE_URL }}
+          PROVIDER_A_MODEL: ${{ secrets.PROVIDER_A_MODEL }}
+          PROVIDER_B_API_KEY: ${{ secrets.PROVIDER_B_API_KEY }}
+          PROVIDER_B_BASE_URL: ${{ secrets.PROVIDER_B_BASE_URL }}
+          PROVIDER_B_MODEL: ${{ secrets.PROVIDER_B_MODEL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          COVERR_API_KEY: ${{ secrets.COVERR_API_KEY }}
+          COVERR_APP_ID: ${{ secrets.COVERR_APP_ID }}
+          FREESOUND_API_KEY: ${{ secrets.FREESOUND_API_KEY }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          TOKEN_CH_ID_HORROR: ${{ secrets.TOKEN_CH_ID_HORROR }}
+          TOKEN_CH_ID_PSYCH: ${{ secrets.TOKEN_CH_ID_PSYCH }}
+          TOKEN_CH_EN_HORROR: ${{ secrets.TOKEN_CH_EN_HORROR }}
+          TOKEN_CH_EN_PSYCH: ${{ secrets.TOKEN_CH_EN_PSYCH }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from dotenv import set_key
+
+          channel = os.environ["CHANNEL"]
+          token_map = {
+              "ch_id_horror": ("TOKEN_CH_ID_HORROR", "config/credentials/ch_id_horror_v2.json"),
+              "ch_horror_id": ("TOKEN_CH_ID_HORROR", "config/credentials/ch_id_horror_v2.json"),
+              "ch_id_psych": ("TOKEN_CH_ID_PSYCH", "config/credentials/ch_id_psych_v2.json"),
+              "ch_en_horror": ("TOKEN_CH_EN_HORROR", "config/credentials/ch_en_horror_v2.json"),
+              "ch_en_psych": ("TOKEN_CH_EN_PSYCH", "config/credentials/ch_en_psych_v2.json"),
+          }
+          if channel not in token_map:
+              raise SystemExit(f"Channel tidak dikenal: {channel}")
+
+          secret_name, token_path = token_map[channel]
+          token_raw = os.environ.get(secret_name, "")
+          if not token_raw.strip():
+              raise SystemExit(f"GitHub Secret {secret_name} belum diisi.")
+          token = json.loads(token_raw)
+          if not token.get("refresh_token"):
+              raise SystemExit("Token Google tidak memiliki refresh_token. Jalankan setup_auth.py ulang dan izinkan akses offline.")
+          Path(token_path).parent.mkdir(parents=True, exist_ok=True)
+          Path(token_path).write_text(json.dumps(token), encoding="utf-8")
+
+          env_keys = [
+              "YOUTUBE_API_KEY", "PROVIDER_A_API_KEY", "PROVIDER_A_BASE_URL",
+              "PROVIDER_A_MODEL", "PROVIDER_B_API_KEY", "PROVIDER_B_BASE_URL",
+              "PROVIDER_B_MODEL", "GEMINI_API_KEY", "GROQ_API_KEY",
+              "ANTHROPIC_API_KEY", "NVIDIA_API_KEY", "PERPLEXITY_API_KEY",
+              "PEXELS_API_KEY", "PIXABAY_API_KEY", "COVERR_API_KEY",
+              "COVERR_APP_ID", "FREESOUND_API_KEY", "ELEVENLABS_API_KEY",
+              "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "GOOGLE_CLIENT_ID",
+              "GOOGLE_CLIENT_SECRET", "GOOGLE_DRIVE_FOLDER_ID",
+          ]
+          Path(".env").touch()
+          for key in env_keys:
+              value = os.environ.get(key, "")
+              if value:
+                  set_key(".env", key, value, quote_mode="always")
+          set_key(".env", "TTS_MODE", "edge", quote_mode="always")
+          set_key(".env", "RENDER_PRESET", "fast", quote_mode="always")
+          set_key(".env", "LOG_LEVEL", "INFO", quote_mode="always")
+          print(f"Environment disiapkan untuk {channel}; nilai rahasia tidak ditampilkan.")
+          PY
+
+      - name: Run Mesin Cuan production pipeline
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          TOPIC: ${{ inputs.topic }}
+          PROFILE: ${{ inputs.profile }}
+          SKIP_QC: ${{ inputs.skip_qc }}
+        run: |
+          args=(--channel "$CHANNEL" --topic "$TOPIC" --profile "$PROFILE")
+          if [ "$SKIP_QC" = "true" ]; then
+            args+=(--skip-qc)
+          fi
+          python main.py "${args[@]}"
+
+      - name: Save logs, scripts, and rendered video as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mesin-cuan-${{ inputs.channel }}-${{ github.run_number }}
+          path: |
+            logs/
+            data/${{ inputs.channel }}/scripts/
+            output/
+          if-no-files-found: warn
+          retention-days: 7

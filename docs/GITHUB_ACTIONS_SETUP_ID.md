@@ -63,7 +63,6 @@ Secret token harus berisi **isi JSON token**, bukan nama file dan bukan Base64. 
 
 Buat token melalui `python setup_auth.py` pada perangkat yang dapat menyelesaikan login Google OAuth. Jangan pernah menaruh token atau API key di file yang di-commit ke repository, issue, atau chat publik. Jangan mengirim secret kepada orang lain.
 
-Alias `ch_horror_id` menggunakan token yang sama dengan `ch_id_horror`, sesuai `config/settings.json`.
 
 ## 2. Jalankan dari HP
 
@@ -79,7 +78,7 @@ Alias `ch_horror_id` menggunakan token yang sama dengan `ch_id_horror`, sesuai `
 
 Workflow ini mengikuti arsitektur repository saat ini: `main.py` memproduksi video dan `engine/gdrive_engine.py` mengirim video beserta metadata ke folder antrean Google Drive. README proyek menyebut layanan terpisah `mesin-cuan-uploader` di Koyeb/Railway yang mengambil antrean itu dan mengunggah ke YouTube sesuai jadwal.
 
-**Artinya workflow ini belum mengunggah langsung ke YouTube.** Upload otomatis ke YouTube baru berjalan jika layanan uploader terpisah sudah aktif, memiliki akses Google Drive/YouTube yang valid, dan memantau folder antrean yang sama.
+**Artinya workflow ini belum mengunggah langsung ke YouTube. Ada juga ketidakcocokan format token yang harus dibereskan sebelum uploader yang saat ini direferensikan bisa dipakai:** workflow Mesin Cuan menyimpan token Google dalam format JSON (`google.oauth2.credentials.Credentials`), sedangkan repository uploader yang direferensikan membaca token Base64 berisi objek Python pickle. Selain itu, kode uploader yang diperiksa menetapkan privasi video menjadi `public` secara langsung. Jangan aktifkan uploader tersebut sebelum format token diselaraskan dan pengaturan privasi diperbaiki. Upload otomatis ke YouTube belum terverifikasi dan belum siap dinyalakan.
 
 ## 4. Catatan operasional
 

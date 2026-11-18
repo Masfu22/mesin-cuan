@@ -62,7 +62,7 @@ Channel yang tokennya belum tersedia akan dilewati. Jangan memasukkan API key Ge
    ```bash
    python setup_auth.py --channel ch_id_horror
    ```
-6. Selesaikan login Google di browser. Token tersimpan di config/credentials/ch_id_horror_v2.json.
+6. Script menampilkan URL otorisasi di Termux. Buka URL tersebut secara manual di browser Android, login Google, lalu izinkan akses. Jika browser meminta membuka alamat localhost setelah persetujuan, pilih buka/lanjutkan. Token tersimpan di config/credentials/ch_id_horror_v2.json.
 7. Buka file token itu secara lokal di perangkat dan salin seluruh JSON langsung ke secret TOKEN_CH_ID_HORROR pada GitHub dan variable bernama sama di Railway. Jangan kirim JSON ke chat.
 8. Ulangi satu channel per satu channel setelah channel pertama berhasil diuji.
 

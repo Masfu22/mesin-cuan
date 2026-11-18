@@ -9,7 +9,6 @@ on:
         type: choice
         options:
           - ch_id_horror
-          - ch_horror_id
           - ch_id_psych
           - ch_en_horror
           - ch_en_psych
@@ -110,7 +109,6 @@ jobs:
           channel = os.environ["CHANNEL"]
           token_map = {
               "ch_id_horror": ("TOKEN_CH_ID_HORROR", "config/credentials/ch_id_horror_v2.json"),
-              "ch_horror_id": ("TOKEN_CH_ID_HORROR", "config/credentials/ch_id_horror_v2.json"),
               "ch_id_psych": ("TOKEN_CH_ID_PSYCH", "config/credentials/ch_id_psych_v2.json"),
               "ch_en_horror": ("TOKEN_CH_EN_HORROR", "config/credentials/ch_en_horror_v2.json"),
               "ch_en_psych": ("TOKEN_CH_EN_PSYCH", "config/credentials/ch_en_psych_v2.json"),

@@ -60,8 +60,8 @@
       "active": false,
       "schedule": {
         "type": "range",
-        "start_date": "2026-03-22",
-        "end_date": "2026-03-28"
+        "start_date": "2026-04-22",
+        "end_date": "2026-12-28"
       },
       "per_channel": {
         "ch_id_horror": {
@@ -93,9 +93,9 @@
       "schedule": {
         "type": "specific_dates",
         "dates": [
-          "2026-05-26",
-          "2026-04-28",
-          "2026-04-30"
+          "2026-12-26",
+          "2026-12-28",
+          "2026-12-30"
         ]
       },
       "all_channels": {
@@ -116,7 +116,7 @@
           "friday"
         ],
         "start_date": "2026-03-22",
-        "end_date": "2026-04-30"
+        "end_date": "2026-12-30"
       },
       "all_channels": {
         "shorts_per_day": 1,

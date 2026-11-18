@@ -1,0 +1,39 @@
+name: Validate Mesin Cuan configuration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile Python source
+        run: python -m compileall -q main.py setup_auth.py engine
+      - name: Validate channel settings JSON
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          settings = json.loads(Path("config/settings.json").read_text(encoding="utf-8"))
+          allowed = {"ch_id_horror", "ch_id_psych", "ch_en_horror", "ch_en_psych"}
+          ids = [item.get("id") for item in settings.get("channels", []) if item.get("id") in allowed]
+          missing = allowed - set(ids)
+          if missing:
+              raise SystemExit("Channel config missing: " + ", ".join(sorted(missing)))
+          if len(ids) != len(set(ids)):
+              raise SystemExit("Duplicate channel IDs found.")
+          print("Channel settings valid; no secret values were read.")
+          PY

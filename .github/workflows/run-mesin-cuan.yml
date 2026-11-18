@@ -29,6 +29,11 @@ on:
         required: true
         type: boolean
         default: false
+      dry_run:
+        description: Uji render tanpa mengunggah ke Google Drive
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -72,6 +77,7 @@ jobs:
       - name: Prepare environment and Google OAuth token
         env:
           CHANNEL: ${{ inputs.channel }}
+          DRY_RUN: ${{ inputs.dry_run }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           PROVIDER_A_API_KEY: ${{ secrets.PROVIDER_A_API_KEY }}
           PROVIDER_A_BASE_URL: ${{ secrets.PROVIDER_A_BASE_URL }}
@@ -116,15 +122,18 @@ jobs:
           if channel not in token_map:
               raise SystemExit(f"Channel tidak dikenal: {channel}")
 
-          secret_name, token_path = token_map[channel]
-          token_raw = os.environ.get(secret_name, "")
-          if not token_raw.strip():
-              raise SystemExit(f"GitHub Secret {secret_name} belum diisi.")
-          token = json.loads(token_raw)
-          if not token.get("refresh_token"):
-              raise SystemExit("Token Google tidak memiliki refresh_token. Jalankan setup_auth.py ulang dan izinkan akses offline.")
-          Path(token_path).parent.mkdir(parents=True, exist_ok=True)
-          Path(token_path).write_text(json.dumps(token), encoding="utf-8")
+          if os.environ.get("DRY_RUN", "false").lower() != "true":
+              secret_name, token_path = token_map[channel]
+              token_raw = os.environ.get(secret_name, "")
+              if not token_raw.strip():
+                  raise SystemExit(f"GitHub Secret {secret_name} belum diisi.")
+              token = json.loads(token_raw)
+              if not token.get("refresh_token"):
+                  raise SystemExit("Token Google tidak memiliki refresh_token. Jalankan setup_auth.py ulang dan izinkan akses offline.")
+              Path(token_path).parent.mkdir(parents=True, exist_ok=True)
+              Path(token_path).write_text(json.dumps(token), encoding="utf-8")
+          else:
+              print("DRY RUN aktif: token OAuth Google tidak diperlukan.")
 
           env_keys = [
               "YOUTUBE_API_KEY", "PROVIDER_A_API_KEY", "PROVIDER_A_BASE_URL",
@@ -153,10 +162,14 @@ jobs:
           TOPIC: ${{ inputs.topic }}
           PROFILE: ${{ inputs.profile }}
           SKIP_QC: ${{ inputs.skip_qc }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           args=(--channel "$CHANNEL" --topic "$TOPIC" --profile "$PROFILE")
           if [ "$SKIP_QC" = "true" ]; then
             args+=(--skip-qc)
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
           fi
           python main.py "${args[@]}"
 

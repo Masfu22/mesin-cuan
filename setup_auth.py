@@ -38,7 +38,9 @@ def setup_channel(channel: dict) -> str | None:
     from google_auth_oauthlib.flow import InstalledAppFlow
 
     flow = InstalledAppFlow.from_client_secrets_file(secret_file, SCOPES)
-    creds = flow.run_local_server(port=0, open_browser=True)
+    # Jangan memaksa membuka browser dari Termux; URL otorisasi ditampilkan
+    # agar pengguna Android dapat membukanya secara manual di browser.
+    creds = flow.run_local_server(port=0, open_browser=False)
     if not creds.refresh_token:
         raise RuntimeError(
             ch_id + ": refresh_token tidak diterbitkan. Periksa consent screen "

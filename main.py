@@ -196,14 +196,15 @@ def api_key_wizard():
             if url:
                 print(f"     🔗 {url}")
             if current:
-                masked = current[:8] + "..." if len(current) > 8 else current
-                print(f"     Saat ini: {masked}{status}")
+                print(f"     Saat ini: sudah terisi (nilai disembunyikan){status}")
                 print(f"     [ENTER untuk keep]")
             else:
                 print(f"     [Kosong — ketik key atau ENTER untuk skip]")
 
             try:
-                val = input(f"     {env_key} = ").strip()
+                # API key tidak ditampilkan saat diketik di terminal.
+                import getpass
+                val = getpass.getpass(f"     {env_key} = ").strip()
             except (EOFError, KeyboardInterrupt):
                 print("\n\n  ⚠️  Setup dibatalkan. Key yang sudah diisi tetap tersimpan.\n")
                 break

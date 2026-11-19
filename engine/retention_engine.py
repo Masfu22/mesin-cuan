@@ -82,15 +82,10 @@ def _build_credentials(channel_cfg: dict):
     secret_path = channel_cfg.get("google_client_secret", "")
     token_path = channel_cfg.get("credentials_file", "")
 
-    if not secret_path or not Path(secret_path).exists():
-        raise FileNotFoundError(
-            f"File secret tidak ditemukan: {secret_path!r}\n"
-            f"Pastikan field 'google_client_secret' di settings.json benar."
-        )
-
     creds: Optional[Credentials] = None
 
-    # Coba load token yang sudah ada
+    # Prioritaskan OAuth authorized-user token dari GitHub Secret.
+    # Client secret hanya diperlukan jika token tidak tersedia/tidak valid.
     if token_path and Path(token_path).exists():
         try:
             creds = Credentials.from_authorized_user_file(token_path, SCOPES)
@@ -98,7 +93,6 @@ def _build_credentials(channel_cfg: dict):
             logger.warning(f"Token cache rusak atau invalid, akan re-auth: {e}")
             creds = None
 
-    # Token expired → refresh
     if creds and creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
@@ -107,8 +101,12 @@ def _build_credentials(channel_cfg: dict):
             logger.warning(f"Refresh token gagal, akan re-auth: {e}")
             creds = None
 
-    # Belum ada / tidak valid → flow
     if not creds or not creds.valid:
+        if not secret_path or not Path(secret_path).exists():
+            raise FileNotFoundError(
+                f"File secret tidak ditemukan: {secret_path!r}. "
+                "Token OAuth valid tidak tersedia dan client secret belum dipasang."
+            )
         flow = InstalledAppFlow.from_client_secrets_file(secret_path, SCOPES)
         creds = flow.run_local_server(port=0, open_browser=True)
         logger.info(f"[{channel_cfg['id']}] Login sukses, menyimpan token.")
@@ -339,8 +337,11 @@ def analyze_channel(channel: dict) -> dict:
     # Auto-bootstrap: sync jika DB masih kosong
     total = count_videos_for_channel(channel_id)
     if total == 0:
-        logger.info(f"[{channel_id}] DB kosong → auto-sync dari YouTube…")
-        sync_recent_videos(channel_id)
+        if os.getenv("DRY_RUN", "").strip().lower() == "true":
+            logger.info(f"[{channel_id}] DRY RUN: DB kosong, lewati OAuth/YouTube sync.")
+        else:
+            logger.info(f"[{channel_id}] DB kosong → auto-sync dari YouTube…")
+            sync_recent_videos(channel_id)
 
     videos = get_videos_for_channel(channel_id)
 

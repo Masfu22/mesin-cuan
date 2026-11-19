@@ -1,0 +1,97 @@
+name: Test Ollama AI connection
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-ollama:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check required configuration without revealing secrets
+        env:
+          OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+          OLLAMA_MODEL: ${{ secrets.OLLAMA_MODEL }}
+        run: |
+          python - <<'PY'
+          import os
+          from urllib.parse import urlparse
+
+          base = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/")
+          key = os.getenv("OLLAMA_API_KEY", "").strip()
+          model = os.getenv("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
+
+          if not base:
+              raise SystemExit("FAIL: OLLAMA_BASE_URL belum diisi di GitHub Secrets.")
+          if not key:
+              raise SystemExit("FAIL: OLLAMA_API_KEY belum diisi di GitHub Secrets.")
+          parsed = urlparse(base)
+          if parsed.scheme != "https" or parsed.hostname != "ollama.com" or parsed.path not in ("", "/"):
+              raise SystemExit("FAIL: Untuk tes Ollama Cloud, OLLAMA_BASE_URL harus tepat https://ollama.com (tanpa /api).")
+          if not model:
+              raise SystemExit("FAIL: Nama model kosong.")
+          print("Konfigurasi tersedia; nilai rahasia tidak ditampilkan.")
+          print(f"Endpoint: {parsed.scheme}://{parsed.hostname}")
+          print(f"Model: {model}")
+          PY
+
+      - name: Test cloud chat endpoint and JSON response
+        env:
+          OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+          OLLAMA_MODEL: ${{ secrets.OLLAMA_MODEL }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          base = os.environ["OLLAMA_BASE_URL"].strip().rstrip("/")
+          key = os.environ["OLLAMA_API_KEY"].strip()
+          model = os.getenv("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
+          payload = {
+              "model": model,
+              "messages": [
+                  {"role": "system", "content": "Return only a valid JSON object. No markdown."},
+                  {"role": "user", "content": "Return exactly this JSON object: {\"status\":\"ok\",\"provider\":\"ollama\"}"},
+              ],
+              "stream": False,
+              "format": "json",
+              "options": {"temperature": 0, "num_predict": 128},
+          }
+          request = urllib.request.Request(
+              base + "/api/chat",
+              data=json.dumps(payload).encode("utf-8"),
+              headers={
+                  "Authorization": "Bearer " + key,
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=300) as response:
+                  body = json.loads(response.read().decode("utf-8"))
+          except urllib.error.HTTPError as exc:
+              # Do not print request headers or API key.
+              detail = exc.read().decode("utf-8", errors="replace")[:500]
+              raise SystemExit(f"FAIL: Ollama HTTP {exc.code}: {detail}")
+          except Exception as exc:
+              raise SystemExit(f"FAIL: Ollama connection error: {type(exc).__name__}: {exc}")
+
+          content = body.get("message", {}).get("content", "").strip()
+          if not content:
+              raise SystemExit("FAIL: Ollama returned an empty message.")
+          try:
+              parsed = json.loads(content)
+          except Exception as exc:
+              raise SystemExit(f"FAIL: Model response was not valid JSON: {exc}")
+          if parsed.get("status") != "ok" or parsed.get("provider") != "ollama":
+              raise SystemExit("FAIL: Model responded, but JSON content did not pass the expected check.")
+          print("PASS: Ollama Cloud authenticated, model responded, and JSON output is valid.")
+          print("PASS: No video generation, Google API access, or YouTube upload was performed.")
+          PY

@@ -14,6 +14,7 @@ from pathlib import Path
 
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",
     "https://www.googleapis.com/auth/yt-analytics.readonly",
     "https://www.googleapis.com/auth/drive.file",
 ]
@@ -23,7 +24,7 @@ def setup_channel(channel: dict) -> str | None:
     ch_id = channel["id"]
     ch_name = channel["name"]
     secret_file = channel.get("google_client_secret", "config/google_client_secret.json")
-    token_file = channel["credentials_file"].replace("_token.json", "_v2.json")
+    token_file = channel["credentials_file"]
 
     print("\n" + "=" * 54)
     print("Setup OAuth: " + ch_name + " (" + ch_id + ")")

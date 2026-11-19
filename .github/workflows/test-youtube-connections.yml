@@ -1,4 +1,4 @@
-name: Test YouTube channel connections
+name: Test Google API connections
 
 on:
   workflow_dispatch:
@@ -19,10 +19,10 @@ permissions:
   contents: read
 
 jobs:
-  test-youtube-oauth:
-    name: Verify YouTube OAuth without uploading
+  test-google-apis:
+    name: Verify Drive, YouTube Data, and YouTube Analytics
     runs-on: ubuntu-22.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -37,7 +37,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install google-auth google-auth-httplib2 google-api-python-client
 
-      - name: Test OAuth and identify channel
+      - name: Test OAuth and all three Google APIs
         env:
           CHANNEL: ${{ inputs.channel }}
           TOKEN_CH_ID_HORROR: ${{ secrets.TOKEN_CH_ID_HORROR }}
@@ -48,6 +48,7 @@ jobs:
           python - <<'PY'
           import json
           import os
+          from datetime import date, timedelta
           from google.oauth2.credentials import Credentials
           from google.auth.transport.requests import Request
           from googleapiclient.discovery import build
@@ -58,41 +59,81 @@ jobs:
               "ch_en_horror": "TOKEN_CH_EN_HORROR",
               "ch_en_psych": "TOKEN_CH_EN_PSYCH",
           }
+          required_scopes = [
+              "https://www.googleapis.com/auth/drive.file",
+              "https://www.googleapis.com/auth/youtube.upload",
+              "https://www.googleapis.com/auth/youtube.readonly",
+              "https://www.googleapis.com/auth/yt-analytics.readonly",
+          ]
           selected = os.environ.get("CHANNEL", "all")
           channels = list(token_map) if selected == "all" else [selected]
           failures = 0
 
           for channel in channels:
-              print("\\n" + "=" * 58)
-              print("Memeriksa:", channel)
+              print("\\n" + "=" * 64)
+              print("CHANNEL:", channel)
               raw = os.environ.get(token_map[channel], "").strip()
               if not raw:
-                  print("GAGAL: GitHub Secret token belum diisi.")
+                  print("TOKEN: GAGAL - GitHub Secret belum diisi")
                   failures += 1
                   continue
+
               try:
                   info = json.loads(raw)
+                  if not isinstance(info, dict):
+                      raise ValueError("Isi Secret harus berupa JSON object.")
+                  if not info.get("refresh_token"):
+                      raise ValueError("Token tidak memiliki refresh_token.")
+                  # Abaikan metadata scopes lama dari JSON. Google menentukan
+                  # izin berdasarkan grant saat consent; metadata lama dapat
+                  # menyebabkan invalid_scope saat refresh.
+                  info.pop("scopes", None)
                   creds = Credentials.from_authorized_user_info(info)
-                  if not creds.refresh_token:
-                      raise RuntimeError("Token tidak memiliki refresh_token.")
                   if creds.expired or not creds.valid:
                       creds.refresh(Request())
+                  print("OAUTH: BERHASIL - access token aktif")
+
+                  # 1) YouTube Data API v3: identifikasi channel milik akun.
                   yt = build("youtube", "v3", credentials=creds, cache_discovery=False)
-                  result = yt.channels().list(part="id,snippet", mine=True, maxResults=5).execute()
-                  items = result.get("items", [])
+                  yt_result = yt.channels().list(
+                      part="id,snippet", mine=True, maxResults=5
+                  ).execute()
+                  items = yt_result.get("items", [])
                   if not items:
-                      raise RuntimeError("OAuth valid, tetapi Google tidak mengembalikan channel milik akun ini.")
+                      raise RuntimeError("YouTube Data API: tidak menemukan channel milik akun ini.")
                   for item in items:
-                      print("BERHASIL: OAuth terhubung")
+                      print("YOUTUBE DATA API: BERHASIL")
                       print("Nama channel:", item.get("snippet", {}).get("title", "(tanpa nama)"))
                       print("Channel ID:", item.get("id", "(tidak tersedia)"))
-                  print("Catatan: tidak ada video yang diunggah atau diubah.")
+
+                  # 2) Google Drive API: uji akses daftar file milik aplikasi.
+                  drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+                  drive.files().list(
+                      pageSize=1,
+                      q="trashed = false",
+                      fields="files(id,name,mimeType)"
+                  ).execute()
+                  print("GOOGLE DRIVE API: BERHASIL - endpoint files.list dapat diakses")
+
+                  # 3) YouTube Analytics API: uji query metrik channel.
+                  analytics = build("youtubeAnalytics", "v2", credentials=creds, cache_discovery=False)
+                  yesterday = (date.today() - timedelta(days=1)).isoformat()
+                  analytics.reports().query(
+                      ids="channel==MINE",
+                      startDate=yesterday,
+                      endDate=yesterday,
+                      metrics="views",
+                  ).execute()
+                  print("YOUTUBE ANALYTICS API: BERHASIL - query metrik diterima")
+                  print("STATUS:", channel, "LULUS semua pengujian API")
+                  print("Catatan: tidak ada video yang diunggah, diubah, atau file Drive yang dibuat.")
+
               except Exception as exc:
                   message = str(exc).replace(raw, "[TOKEN DISEMBUNYIKAN]")
                   print("GAGAL:", message[:1200])
                   failures += 1
 
-          print("\\nHasil:", len(channels) - failures, "berhasil;", failures, "gagal.")
+          print("\\nRINGKASAN:", len(channels) - failures, "channel lulus;", failures, "channel gagal.")
           if failures:
               raise SystemExit(1)
           PY

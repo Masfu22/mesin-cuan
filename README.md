@@ -228,7 +228,7 @@ python main.py --debug
 | Key | Provider | Purpose | Get It Here |
 |---|---|---|---|
 | `YOUTUBE_API_KEY` | YouTube Data API v3 | Trending detection & topic discovery | [Google Cloud Console](https://console.cloud.google.com/apis/credentials) |
-| `PEXELS_API_KEY` | Pexels | B-roll footage & images | [pexels.com/api](https://www.pexels.com/api/) |
+| `PEXELS_API_KEY` | Pexels | Optional B-roll source; not required | [pexels.com/api](https://www.pexels.com/api/) |
 | `GOOGLE_CLIENT_ID` | Google OAuth2 | YouTube upload + Google Drive | [Google Cloud Console](https://console.cloud.google.com/apis/credentials) |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth2 | Pair for GOOGLE_CLIENT_ID | [Google Cloud Console](https://console.cloud.google.com/apis/credentials) |
 | `GOOGLE_DRIVE_FOLDER_ID` | Google Drive | Upload queue folder | Right-click folder → Share → Copy link |
@@ -250,7 +250,7 @@ python main.py --debug
 
 | Key | Provider | Purpose | Impact if Missing |
 |---|---|---|---|
-| `PIXABAY_API_KEY` | Pixabay | Footage fallback | No fallback footage |
+| `PIXABAY_API_KEY` | Pixabay | Optional footage API source | Public Mixkit/Commons sources remain available |
 | `PERPLEXITY_API_KEY` | Perplexity | Web research — accurate context | Uses local Ollama instead |
 | `ANTHROPIC_API_KEY` | Anthropic | Last-resort AI fallback | Only 3-tier fallback chain |
 | `NVIDIA_API_KEY` | NVIDIA NIM | Vision QC alternative (free) | QC via Gemini only |
@@ -263,6 +263,12 @@ python main.py --debug
 | `COVERR_APP_ID` | Coverr | Pair for COVERR_API_KEY | — |
 
 > 💡 **Pro tip:** Run `python main.py --setup` for an interactive setup wizard — no manual `.env` editing needed!
+
+
+
+**No API key required for public media fallback:** the Mixkit public-page scraper and Wikimedia Commons image search can run without API credentials. FFmpeg is installed by GitHub Actions and can animate Commons images into short clips. Scraped pages may change; only use assets when permitted by source terms and verify each asset's license.
+
+For GitHub Actions Secrets setup, see [Panduan GitHub Secrets (Bahasa Indonesia)](docs/API_KEYS_SETUP_ID.md).
 
 ## ⚡ Quick Start (Minimal Mode)
 

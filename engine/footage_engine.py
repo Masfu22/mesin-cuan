@@ -37,6 +37,7 @@ import requests
 import random
 from pathlib import Path
 from engine.utils import get_logger, require_env, load_settings, timestamp, channel_data_path
+from engine.public_media_engine import search_public_media, download_image_as_video
 
 logger = get_logger("footage_engine")
 
@@ -414,7 +415,7 @@ def setup_fallback_pool(ch_id: str, niche: str, min_count: int = FALLBACK_POOL_M
             if not clip.get("url"):
                 continue
             out_path = str(fallback_dir / f"{timestamp()}.mp4")
-            if _download_video(clip["url"], out_path):
+            if _download_clip_asset(clip, out_path, "long_form"):
                 needed -= 1
                 logger.info(f"[{ch_id}] Fallback +1: {os.path.basename(out_path)}")
                 time.sleep(0.3)
@@ -520,7 +521,7 @@ def _download_clips(keywords: list, n: int, ch_id: str,
                 continue
 
             out_path = f"{out_dir}/{timestamp()}.mp4"
-            if _download_video(clip["url"], out_path):
+            if _download_clip_asset(clip, out_path, profile):
                 downloaded.append(out_path)
                 used_clip_ids.add(clip_id)
                 clip_cache.setdefault(cache_key, []).append(out_path)
@@ -558,11 +559,16 @@ def _search_all_sources(keyword: str, limit: int, profile: str = "shorts") -> li
         logger.info(f"Pixabay kurang ({len(results)}) → mencoba Coverr")
         results += _search_coverr(keyword, limit)
 
-    # Pexels benar-benar opsional: jangan panggil endpoint atau require_env
-    # jika pengguna tidak memiliki API key.
-    if len(results) < 2 and os.environ.get("PEXELS_API_KEY", "").strip():
-        logger.info(f"Sumber sebelumnya kurang → mencoba Pexels (opsional)")
-        results += _search_pexels(keyword, limit, orientation)
+    # Sumber publik tanpa API key: scrape halaman Mixkit dan cari gambar Commons.
+    if len(results) < limit:
+        public_results = search_public_media(keyword, limit - len(results))
+        if public_results:
+            logger.info("Sumber publik tanpa API key: %s aset", len(public_results))
+            results += public_results
+
+    # Pexels tetap opsional dan hanya dipanggil jika key tersedia.
+    if len(results) < limit and os.environ.get("PEXELS_API_KEY", "").strip():
+        results += _search_pexels(keyword, limit - len(results), orientation)
 
     return results
 
@@ -680,6 +686,24 @@ def _search_coverr(keyword: str, limit: int) -> list:
 # ══════════════════════════════════════════════════════════════════════════════
 #  DOWNLOAD
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _download_clip_asset(clip: dict, out_path: str, profile: str = "shorts") -> bool:
+    """Download stock video or convert a public image to an animated MP4."""
+    if clip.get("media_type") == "image":
+        attribution = {
+            "source": clip.get("source", "Wikimedia Commons"),
+            "title": clip.get("title", ""),
+            "author": clip.get("artist", ""),
+            "license": clip.get("license", "Periksa halaman sumber"),
+            "source_page": clip.get("page_url", ""),
+            "downloaded_from": clip.get("url", ""),
+        }
+        orientation = "portrait" if profile == "shorts" else "landscape"
+        return download_image_as_video(
+            clip.get("url", ""), out_path, orientation, attribution
+        )
+    return bool(clip.get("url")) and _download_video(clip["url"], out_path)
+
 
 def _download_video(url: str, out_path: str) -> bool:
     """Download satu video file dengan retry. Return True jika berhasil."""

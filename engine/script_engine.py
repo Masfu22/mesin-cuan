@@ -215,10 +215,20 @@ def _call_ai(system_prompt: str, user_message: str, profile: str = "shorts") -> 
     if cfg_b["base_url"] and cfg_b["api_key"]:
         primary_providers.append(("Provider-B", lambda: _call_provider_b(system_prompt, user_message, profile)))
 
-    # Groq sebagai last-resort fallback saja
-    providers = primary_providers + [
-        ("Groq", lambda: _call_groq(system_prompt, user_message, profile)),
-    ]
+    # Fallback berurutan: NVIDIA NIM, Gemini, Anthropic, lalu Groq.
+    # Provider tanpa API key dilewati otomatis.
+    fallback_providers = []
+    if os.getenv("NVIDIA_API_KEY", "").strip():
+        fallback_providers.append(("NVIDIA NIM", lambda: _call_nvidia(system_prompt, user_message, profile)))
+    if os.getenv("GEMINI_API_KEY", "").strip():
+        fallback_providers.append(("Gemini", lambda: _call_gemini(system_prompt, user_message, profile)))
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        fallback_providers.append(("Anthropic", lambda: _call_anthropic(system_prompt, user_message, profile)))
+    if os.getenv("GROQ_API_KEY", "").strip():
+        fallback_providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
+    providers = primary_providers + fallback_providers
+    if not providers:
+        raise RuntimeError("Tidak ada AI provider aktif. Isi minimal satu API key atau konfigurasi Provider-A/B.")
 
     last_error = None
     for name, fn in providers:
@@ -633,6 +643,38 @@ def _call_groq(system_prompt: str, user_message: str, profile: str) -> dict:
 
         except Exception as e:
             raise  # Error non-JSON (rate limit, dll) langsung raise
+
+
+# ─── NVIDIA NIM ───────────────────────────────────────────────────────────────
+def _call_nvidia(system_prompt: str, user_message: str, profile: str) -> dict:
+    """Generate script melalui endpoint OpenAI-compatible NVIDIA NIM."""
+    api_key = require_env("NVIDIA_API_KEY")
+    base_url = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").strip().rstrip("/")
+    model = os.getenv("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct").strip()
+    max_tokens = SCRIPT_MAX_TOKENS_LONGFORM if profile == "long_form" else SCRIPT_MAX_TOKENS_SHORTS
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt + "\n\nReturn only a valid JSON object."},
+            {"role": "user", "content": user_message + _get_length_hint(profile)},
+        ],
+        "temperature": 0.7,
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+    response = _post_json_no_proxy(
+        f"{base_url}/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        payload=payload,
+        timeout=300,
+    )
+    response.raise_for_status()
+    raw = response.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+    if not raw:
+        raise RuntimeError("NVIDIA NIM mengembalikan respons kosong")
+    result = _parse_json_response(raw, profile)
+    result["generator_model"] = model
+    return result
 
 
 # ─── Gemini ───────────────────────────────────────────────────────────────────

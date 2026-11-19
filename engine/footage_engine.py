@@ -2,13 +2,13 @@
 footage_engine.py — Mesin Cuan Viral Architect
 Download footage dinamis dari multi-source.
 
-Source priority: Pixabay → Pexels → Coverr
+Source priority: Pixabay → Coverr (Pexels opsional)
 Cache lokal: keyword → paths (hemat API call)
 Fallback pool: stok lokal per niche (tidak pernah kosong)
 
 .env variables yang dibutuhkan:
   PIXABAY_API_KEY   — https://pixabay.com/api/docs/
-  PEXELS_API_KEY    — https://www.pexels.com/api/
+  PEXELS_API_KEY    — opsional, hanya dipakai jika tersedia
   COVERR_API_KEY    — daftar di https://coverr.co (opsional)
   COVERR_APP_ID     — daftar di https://coverr.co (opsional)
 
@@ -480,7 +480,7 @@ def _download_clips(keywords: list, n: int, ch_id: str,
                     niche: str = "default", profile: str = "shorts") -> list:
     """
     Download N clips dari multi-source berdasarkan keyword list.
-    Urutan prioritas: keyword cache → Pixabay → Pexels → Coverr → fallback pool
+    Urutan prioritas: keyword cache → Pixabay → Coverr → Pexels (jika ada) → fallback pool
     """
     used_clip_ids = _load_used_clips(ch_id)
     out_dir       = channel_data_path(ch_id, "footage")
@@ -544,7 +544,7 @@ def _download_clips(keywords: list, n: int, ch_id: str,
 def _search_all_sources(keyword: str, limit: int, profile: str = "shorts") -> list:
     """
     Cari footage dari semua source secara berurutan:
-    Pixabay (utama) → Pexels (fallback) → Coverr (fallback ke-2)
+    Pixabay (utama) → Coverr → Pexels (opsional jika API key tersedia)
     """
     orientation = "portrait" if profile == "shorts" else "landscape"
     results     = []
@@ -555,12 +555,14 @@ def _search_all_sources(keyword: str, limit: int, profile: str = "shorts") -> li
         logger.debug("PIXABAY_API_KEY tidak ada â€” langsung gunakan Pexels")
 
     if len(results) < 2:
-        logger.info(f"Pixabay kurang ({len(results)}) → Pexels")
-        results += _search_pexels(keyword, limit, orientation)
-
-    if len(results) < 2:
-        logger.info(f"Pexels juga kurang → Coverr")
+        logger.info(f"Pixabay kurang ({len(results)}) → mencoba Coverr")
         results += _search_coverr(keyword, limit)
+
+    # Pexels benar-benar opsional: jangan panggil endpoint atau require_env
+    # jika pengguna tidak memiliki API key.
+    if len(results) < 2 and os.environ.get("PEXELS_API_KEY", "").strip():
+        logger.info(f"Sumber sebelumnya kurang → mencoba Pexels (opsional)")
+        results += _search_pexels(keyword, limit, orientation)
 
     return results
 

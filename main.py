@@ -1402,6 +1402,8 @@ if __name__ == "__main__":
                 topic_override=args.topic,
             )
         logger.info("✅ Test selesai" if success else "❌ Test gagal")
+        if not success:
+            raise SystemExit(1)
 
     elif args.legacy:
         logger.info("Mode: Legacy (daily_plan dari settings.json)")

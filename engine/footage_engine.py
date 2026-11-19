@@ -600,7 +600,9 @@ def _search_pixabay(keyword: str, limit: int, orientation: str = "landscape") ->
                    or videos_dict.get("medium", {}).get("url")
                    or videos_dict.get("small", {}).get("url"))
             if url:
-                result.append({"id": f"pb_{video['id']}", "url": url})
+                result.append({"id": f"pb_{video['id']}", "url": url,
+                               "media_type": "video", "source": "Pixabay",
+                               "license": "Pixabay Content License; verify item terms"})
 
         logger.debug(f"Pixabay '{keyword}' ({pix_orient}): {len(result)} clips")
         return result
@@ -634,7 +636,9 @@ def _search_pexels(keyword: str, limit: int, orientation: str = "landscape") -> 
                 None
             )
             if mp4:
-                result.append({"id": f"px_{video['id']}", "url": mp4})
+                result.append({"id": f"px_{video['id']}", "url": mp4,
+                               "media_type": "video", "source": "Pexels",
+                               "license": "Pexels license; verify item terms"})
 
         logger.debug(f"Pexels '{keyword}' ({orientation}): {len(result)} clips")
         return result
@@ -674,7 +678,9 @@ def _search_coverr(keyword: str, limit: int) -> list:
             url = video.get("mp4") or video.get("url")
             if url:
                 vid_id = video.get("id", hash(url))
-                result.append({"id": f"cv_{vid_id}", "url": url})
+                result.append({"id": f"cv_{vid_id}", "url": url,
+                               "media_type": "video", "source": "Coverr",
+                               "license": "Coverr license; verify item terms"})
 
         logger.debug(f"Coverr '{keyword}': {len(result)} clips")
         return result
@@ -702,7 +708,19 @@ def _download_clip_asset(clip: dict, out_path: str, profile: str = "shorts") -> 
         return download_image_as_video(
             clip.get("url", ""), out_path, orientation, attribution
         )
-    return bool(clip.get("url")) and _download_video(clip["url"], out_path)
+    downloaded = bool(clip.get("url")) and _download_video(clip["url"], out_path)
+    if downloaded:
+        Path(out_path).with_suffix(".license.json").write_text(
+            json.dumps({
+                "source": clip.get("source", "Unknown stock source"),
+                "asset_id": clip.get("id", ""),
+                "license": clip.get("license", "Periksa ketentuan lisensi sumber"),
+                "source_page": clip.get("page_url", ""),
+                "downloaded_from": clip.get("url", ""),
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    return downloaded
 
 
 def _download_video(url: str, out_path: str) -> bool:

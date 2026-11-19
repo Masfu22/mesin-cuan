@@ -316,6 +316,10 @@ def prepare_fresh_run(channels: list, dry_run: bool = False) -> None:
             deleted = 0
             for item in glob.glob(os.path.join(folder, "*")):
                 try:
+                    # Simpan fallback pool lokal agar tetap bisa dipakai tanpa API footage.
+                    if sub == "footage" and os.path.basename(item) == "fallback" and os.path.isdir(item):
+                        logger.info(f"  [{ch_id}] footage/fallback/ dipertahankan")
+                        continue
                     if os.path.isfile(item) or os.path.islink(item):
                         os.remove(item)
                         deleted += 1

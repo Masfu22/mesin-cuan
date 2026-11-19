@@ -63,9 +63,6 @@ API_KEY_SPECS = {
         ("YOUTUBE_API_KEY", "YouTube Data API v3",
          "Trending detection & topic discovery",
          "https://console.cloud.google.com/apis/credentials"),
-        ("PEXELS_API_KEY", "Pexels",
-         "B-roll footage & foto — video tanpa footage kalau kosong",
-         "https://www.pexels.com/api/"),
         ("GOOGLE_CLIENT_ID", "Google OAuth2 Client ID",
          "Upload YouTube + Google Drive (dari Google Cloud Console)",
          "https://console.cloud.google.com/apis/credentials"),
@@ -100,8 +97,11 @@ API_KEY_SPECS = {
     # ── OPSIONAL: tool tetap jalan, fitur tertentu skip ────────────────────
     "optional": [
         ("PIXABAY_API_KEY", "Pixabay",
-         "Footage fallback kalau Pexels habis kuota",
+         "Sumber footage utama alternatif Pexels; opsional",
          "https://pixabay.com/api/docs/"),
+        ("PEXELS_API_KEY", "Pexels",
+         "Sumber footage tambahan jika tersedia; tidak wajib",
+         "https://www.pexels.com/api/"),
         ("PERPLEXITY_API_KEY", "Perplexity",
          "Web research engine — konteks akurat untuk naskah",
          "https://www.perplexity.ai/settings/api"),

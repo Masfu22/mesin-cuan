@@ -117,10 +117,10 @@ jobs:
 
           channel = os.environ["CHANNEL"]
           token_map = {
-              "ch_id_horror": ("TOKEN_CH_ID_HORROR", "config/credentials/ch_id_horror_v2.json"),
-              "ch_id_psych": ("TOKEN_CH_ID_PSYCH", "config/credentials/ch_id_psych_v2.json"),
-              "ch_en_horror": ("TOKEN_CH_EN_HORROR", "config/credentials/ch_en_horror_v2.json"),
-              "ch_en_psych": ("TOKEN_CH_EN_PSYCH", "config/credentials/ch_en_psych_v2.json"),
+              "ch_id_horror": ("TOKEN_CH_ID_HORROR", "config/credentials/ch_id_horror_token.json"),
+              "ch_id_psych": ("TOKEN_CH_ID_PSYCH", "config/credentials/ch_id_psych_token.json"),
+              "ch_en_horror": ("TOKEN_CH_EN_HORROR", "config/credentials/ch_en_horror_token.json"),
+              "ch_en_psych": ("TOKEN_CH_EN_PSYCH", "config/credentials/ch_en_psych_token.json"),
           }
           if channel not in token_map:
               raise SystemExit(f"Channel tidak dikenal: {channel}")
@@ -174,12 +174,12 @@ jobs:
                               "GOOGLE_CLIENT_SECRET", "GOOGLE_DRIVE_FOLDER_ID"]
           ai_keys = ["PROVIDER_A_API_KEY", "PROVIDER_A_BASE_URL", "PROVIDER_A_MODEL",
                      "PROVIDER_B_API_KEY", "PROVIDER_B_BASE_URL", "PROVIDER_B_MODEL",
-                     "GEMINI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY"]
+                     "GEMINI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY", "NVIDIA_API_KEY"]
           ai_ready = bool(
               (os.environ.get("PROVIDER_A_API_KEY") and os.environ.get("PROVIDER_A_BASE_URL"))
               or (os.environ.get("PROVIDER_B_API_KEY") and os.environ.get("PROVIDER_B_BASE_URL"))
               or os.environ.get("GROQ_API_KEY") or os.environ.get("GEMINI_API_KEY")
-              or os.environ.get("ANTHROPIC_API_KEY")
+              or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("NVIDIA_API_KEY")
           )
           lines = ["## Pemeriksaan konfigurasi Mesin Cuan — " + channel, "",
                    "| Kelompok | Secret | Status |", "|---|---|---|"]

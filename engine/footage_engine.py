@@ -2,7 +2,7 @@
 footage_engine.py — Mesin Cuan Viral Architect
 Download footage dinamis dari multi-source.
 
-Source priority: Pixabay → Coverr (Pexels opsional)
+Source priority: Pixabay → Coverr → Mixkit scraper → Wikimedia Commons images → local pool
 Cache lokal: keyword → paths (hemat API call)
 Fallback pool: stok lokal per niche (tidak pernah kosong)
 
@@ -481,7 +481,7 @@ def _download_clips(keywords: list, n: int, ch_id: str,
                     niche: str = "default", profile: str = "shorts") -> list:
     """
     Download N clips dari multi-source berdasarkan keyword list.
-    Urutan prioritas: keyword cache → Pixabay → Coverr → Pexels (jika ada) → fallback pool
+    Urutan: cache → Pixabay/Coverr → Mixkit scraper → Commons images via FFmpeg → fallback pool
     """
     used_clip_ids = _load_used_clips(ch_id)
     out_dir       = channel_data_path(ch_id, "footage")

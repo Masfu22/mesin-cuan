@@ -162,6 +162,8 @@ jobs:
           set_key(".env", "LOG_LEVEL", "INFO", quote_mode="always")
 
           # Pemeriksaan konfigurasi: hanya status Secret yang ditampilkan, bukan nilainya.
+          # Footage fallback publik (Mixkit + Wikimedia Commons) tidak memerlukan API key.
+          # FFmpeg dipasang pada runner di step Install FFmpeg.
           optional_keys = [
               "PIXABAY_API_KEY", "PEXELS_API_KEY", "PERPLEXITY_API_KEY", "ANTHROPIC_API_KEY",
               "NVIDIA_API_KEY", "ASSEMBLYAI_API_KEY", "ELEVENLABS_API_KEY",

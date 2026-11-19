@@ -1,0 +1,65 @@
+name: Validate original AI provider waterfall
+
+on:
+  push:
+    branches:
+      - fix/restore-original-ai-waterfall
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "engine/script_engine.py"
+      - ".github/workflows/run-mesin-cuan.yml"
+      - ".env.example"
+      - ".github/workflows/validate-ai-waterfall.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  syntax-and-order:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile Python modules
+        run: |
+          python -m py_compile engine/script_engine.py engine/utils.py engine/script_quality_scorer.py
+
+      - name: Verify original provider order and safe generation path
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path("engine/script_engine.py").read_text(encoding="utf-8")
+          start = source.index("def _call_ai(")
+          end = source.index("# ─── Dual Parallel Generation", start)
+          ai = source[start:end]
+
+          labels = ['"DeepSeek/Ollama"', '"Groq"', '"Gemini"', '"Anthropic"']
+          positions = [ai.index(label) for label in labels]
+          assert positions == sorted(positions), "AI provider order is not the original waterfall"
+          assert '"NVIDIA NIM"' not in ai, "NVIDIA must not be in the script-generation chain"
+
+          generate_start = source.index("def generate(")
+          generate_end = source.index("def review_hook_only(", generate_start)
+          generate = source[generate_start:generate_end]
+          assert "result = _call_ai(" in generate, "generate() must use sequential waterfall"
+          assert "_generate_and_pick_best(" not in generate, "parallel generator must not override original order"
+
+          workflow = Path(".github/workflows/run-mesin-cuan.yml").read_text(encoding="utf-8")
+          for key in ("OLLAMA_BASE_URL", "OLLAMA_API_KEY", "OLLAMA_MODEL",
+                      "GEMINI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY",
+                      "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
+                      "TOKEN_CH_ID_HORROR", "TOKEN_CH_ID_PSYCH",
+                      "TOKEN_CH_EN_HORROR", "TOKEN_CH_EN_PSYCH"):
+              assert key in workflow, f"Missing workflow environment key: {key}"
+
+          print("PASS: Python syntax, original provider order, and preserved integration variables.")
+          PY

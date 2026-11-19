@@ -156,12 +156,9 @@ def generate(topic_data: dict, channel: dict, profile: str = "shorts") -> dict:
         user_message = f"{prefix}: {topic}{part_instruction}"
 
 
-    # ── Dual Parallel Generation + Cross-Provider Scoring ──────────────────
-    result = _generate_and_pick_best(system_prompt, user_message, profile, ch_id, channel=channel)
-    if result is None:
-        # Fallback: sequential waterfall (existing behavior, tidak ada perubahan)
-        logger.info(f"[{ch_id}] Parallel scorer tidak menghasilkan winner → fallback ke sequential")
-        result = _call_ai(system_prompt, user_message, profile=profile)
+    # Gunakan urutan waterfall asli. Parallel Provider-A/B tetap tersedia
+    # sebagai helper legacy, tetapi tidak mengambil alih generator utama.
+    result = _call_ai(system_prompt, user_message, profile=profile)
     result["topic"]              = topic
     result["profile"]            = profile
     result["is_viral_iteration"] = is_viral_iteration
@@ -205,46 +202,52 @@ def review_hook_only(script_data: dict, channel: dict, profile: str = "shorts") 
 
 
 def _call_ai(system_prompt: str, user_message: str, profile: str = "shorts") -> dict:
-    # Provider-A is the preferred writer. Provider-B remains a generation
-    # fallback for resilience, while its primary role is evaluation.
-    cfg_a = get_provider_config("a")
-    cfg_b = get_provider_config("b")
-    primary_providers = []
-    if cfg_a["base_url"] and cfg_a["api_key"]:
-        primary_providers.append(("Provider-A", lambda: _call_provider_a(system_prompt, user_message, profile)))
-    if cfg_b["base_url"] and cfg_b["api_key"]:
-        primary_providers.append(("Provider-B", lambda: _call_provider_b(system_prompt, user_message, profile)))
+    """
+    Original sequential waterfall:
+    DeepSeek/Ollama -> Groq -> Gemini -> Anthropic.
+    Provider yang belum dikonfigurasi dilewati tanpa menunggu timeout.
+    """
+    providers = []
+    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "").strip()
+    ollama_api_key = os.getenv("OLLAMA_API_KEY", "").strip()
 
-    # Fallback berurutan: NVIDIA NIM, Gemini, Anthropic, lalu Groq.
-    # Provider tanpa API key dilewati otomatis.
-    fallback_providers = []
-    if os.getenv("NVIDIA_API_KEY", "").strip():
-        fallback_providers.append(("NVIDIA NIM", lambda: _call_nvidia(system_prompt, user_message, profile)))
-    if os.getenv("GEMINI_API_KEY", "").strip():
-        fallback_providers.append(("Gemini", lambda: _call_gemini(system_prompt, user_message, profile)))
-    if os.getenv("ANTHROPIC_API_KEY", "").strip():
-        fallback_providers.append(("Anthropic", lambda: _call_anthropic(system_prompt, user_message, profile)))
+    if ollama_base_url:
+        if ollama_base_url.startswith("https://ollama.com") and not ollama_api_key:
+            logger.warning("DeepSeek/Ollama dilewati: OLLAMA_API_KEY belum dikonfigurasi.")
+        else:
+            providers.append((
+                "DeepSeek/Ollama",
+                lambda: _call_ollama(system_prompt, user_message, profile),
+            ))
+
     if os.getenv("GROQ_API_KEY", "").strip():
-        fallback_providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
-    providers = primary_providers + fallback_providers
+        providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
+    if os.getenv("GEMINI_API_KEY", "").strip():
+        providers.append(("Gemini", lambda: _call_gemini(system_prompt, user_message, profile)))
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        providers.append(("Anthropic", lambda: _call_anthropic(system_prompt, user_message, profile)))
+
     if not providers:
-        raise RuntimeError("Tidak ada AI provider aktif. Isi minimal satu API key atau konfigurasi Provider-A/B.")
+        raise RuntimeError(
+            "Tidak ada AI provider script yang aktif. Konfigurasikan Ollama, Groq, Gemini, atau Anthropic."
+        )
 
     last_error = None
-    for name, fn in providers:
-        logger.info(f"Trying {name}...")
+    for index, (name, fn) in enumerate(providers):
+        logger.info(f"Trying {name} ({index + 1}/{len(providers)})...")
         try:
             result = fn()
-            logger.info(f"\u2705 {name} berhasil")
+            logger.info(f"✅ {name} berhasil")
+            result.setdefault("generator_provider", name)
             return result
-        except Exception as e:
-            last_error = e
-            logger.warning(f"\u274c {name} gagal: {e}")
-            if name not in ("Provider-A", "Provider-B"):
+        except Exception as exc:
+            last_error = exc
+            logger.warning(f"❌ {name} gagal: {exc}")
+            if index < len(providers) - 1:
                 logger.info(f"Tunggu {PROVIDER_SWITCH_DELAY}s sebelum provider berikutnya...")
                 time.sleep(PROVIDER_SWITCH_DELAY)
 
-    raise RuntimeError(f"Semua provider gagal. Error terakhir: {last_error}")
+    raise RuntimeError(f"Semua provider AI gagal. Error terakhir: {last_error}")
 
 
 # ─── Dual Parallel Generation + Cross-Provider Scoring ───────────────────────
@@ -503,8 +506,77 @@ def _call_provider_a(system_prompt: str, user_message: str, profile: str) -> dic
     raise RuntimeError(f"Provider-A: semua model/attempt gagal. Error terakhir: {last_error}")
 
 
-# Backward-compatible name for older internal callers.
-_call_ollama = _call_provider_a
+def _call_ollama(system_prompt: str, user_message: str, profile: str) -> dict:
+    """DeepSeek V3.1 melalui Ollama (lokal atau Ollama Cloud API)."""
+    base_url = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/")
+    model = os.getenv("OLLAMA_MODEL", "deepseek-v3.1:671b-cloud").strip()
+    api_key = os.getenv("OLLAMA_API_KEY", "").strip()
+    if not base_url:
+        raise RuntimeError("OLLAMA_BASE_URL belum dikonfigurasi.")
+    if base_url.startswith("https://ollama.com") and not api_key:
+        raise RuntimeError("OLLAMA_API_KEY wajib untuk Ollama Cloud.")
+
+    max_tokens = SCRIPT_MAX_TOKENS_LONGFORM if profile == "long_form" else SCRIPT_MAX_TOKENS_SHORTS
+    system_with_json = (
+        system_prompt
+        + "\n\nCRITICAL: Respond with ONLY a raw JSON object. "
+        + "No markdown, no code fences, and no explanation."
+    )
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    last_error = None
+    for attempt in range(1, MAX_JSON_RETRY + 1):
+        user_msg = user_message + _get_length_hint(profile)
+        if attempt > 1:
+            user_msg += (
+                f"\n\n[ATTEMPT {attempt}] Output ONLY one valid JSON object. "
+                "Do not use markdown or explanatory text."
+            )
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_with_json},
+                {"role": "user", "content": user_msg},
+            ],
+            "stream": False,
+            "format": "json",
+            "options": {
+                "temperature": max(0.3, 0.75 - (attempt - 1) * 0.2),
+                "num_predict": max_tokens,
+                "num_ctx": 8192,
+            },
+        }
+        try:
+            response = _post_json_no_proxy(
+                f"{base_url}/api/chat",
+                headers=headers,
+                payload=payload,
+                timeout=(15, 600),
+            )
+            response.raise_for_status()
+            raw = response.json().get("message", {}).get("content", "").strip()
+            if not raw:
+                raise RuntimeError("Ollama mengembalikan respons kosong.")
+            result = _parse_json_response(raw, profile)
+            result["generator_model"] = model
+            return result
+        except requests.exceptions.ConnectionError as exc:
+            raise RuntimeError(f"Ollama tidak dapat dihubungi di {base_url}: {exc}") from exc
+        except requests.exceptions.Timeout as exc:
+            raise RuntimeError("Ollama timeout setelah menunggu hingga 600 detik.") from exc
+        except (json.JSONDecodeError, ValueError) as exc:
+            last_error = exc
+            logger.warning(f"Ollama attempt {attempt}/{MAX_JSON_RETRY}: JSON tidak valid — {exc}")
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            raise RuntimeError(f"Ollama HTTP {status}: {exc}") from exc
+
+    raise RuntimeError(f"Ollama gagal menghasilkan JSON valid: {last_error}")
+
+
+
 
 
 # ─── Provider-B (DeepSeek) ────────────────────────────────────────────────────
@@ -1751,9 +1823,18 @@ def review_and_iterate(script_data: dict, channel: dict, profile: str = "shorts"
                 f"[{channel['id']}] [review] Feedback loop tidak tersedia "
                 "— fallback ke legacy rewrite"
             )
-            first_review = _review_script_payload(
-                current, channel, threshold, mode="rewrite_if_below"
-            )
+            try:
+                first_review = _review_script_payload(
+                    current, channel, threshold, mode="rewrite_if_below"
+                )
+            except Exception as exc:
+                # Review AI bersifat peningkatan kualitas; kegagalannya tidak boleh
+                # menggagalkan naskah valid yang sudah berhasil dibuat.
+                logger.warning(
+                    f"[{channel['id']}] [review] Reviewer tidak tersedia ({exc}); "
+                    "naskah dipertahankan tanpa rewrite."
+                )
+                first_review = {}
             if isinstance(first_review.get("updated_script"), dict):
                 current   = _merge_reviewed_script(current, first_review["updated_script"], profile)
                 current   = inject_hook(current, channel)

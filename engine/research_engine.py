@@ -172,7 +172,7 @@ def _try_ollama_native_search(query: str, language: str) -> dict:
     try:
         # Panggil Ollama Web Search API
         resp = requests.post(
-            "https://ollama.com/api/web_search",
+            f"{OLLAMA_BASE_URL}/api/web_search",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={"query": query, "max_results": 5},
             timeout=RESEARCH_TIMEOUT

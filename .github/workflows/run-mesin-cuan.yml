@@ -46,7 +46,7 @@ jobs:
   produce:
     name: Generate, render, and queue video
     runs-on: ubuntu-22.04
-    timeout-minutes: 350
+    timeout-minutes: 120
     env:
       PYTHONUNBUFFERED: "1"
       TTS_MODE: edge
@@ -242,7 +242,7 @@ jobs:
           if [ "$DRY_RUN" = "true" ]; then
             args+=(--dry-run)
           fi
-          python main.py "${args[@]}"
+          python -u main.py "${args[@]}"
 
       - name: Save logs, scripts, and rendered video as workflow artifact
         if: always()

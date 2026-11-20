@@ -154,7 +154,7 @@ jobs:
 
           models = list(dict.fromkeys([
               os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip(),
-              "gemini-2.5-flash",
+              "gemini-3.5-flash-lite",
           ]))
           errors = []
           for model in models:

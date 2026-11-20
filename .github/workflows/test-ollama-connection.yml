@@ -23,7 +23,9 @@ jobs:
 
           base = (os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/") or "https://ollama.com")
           key = os.getenv("OLLAMA_API_KEY", "").strip()
-          model = os.getenv("OLLAMA_MODEL", "").strip() or "gpt-oss:20b"\n          if model.endswith("-cloud"):\n              model = model[:-6]
+          model = os.getenv("OLLAMA_MODEL", "").strip() or "gpt-oss:20b"
+          if model.endswith("-cloud"):
+              model = model[:-6]
 
           if not key:
               raise SystemExit("FAIL: OLLAMA_API_KEY belum diisi di GitHub Secrets.")

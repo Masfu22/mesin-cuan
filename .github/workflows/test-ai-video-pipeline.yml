@@ -134,6 +134,7 @@ jobs:
           import io
           import os
           import sys
+          import time
           from PIL import Image, ImageDraw
 
           keys = [
@@ -157,33 +158,45 @@ jobs:
           response = None
           errors = []
           for index, key in enumerate(keys, start=1):
-              try:
-                  client = genai.Client(api_key=key)
-                  text_check = client.models.generate_content(
-                      model=os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
-                      contents="Reply with exactly: GEMINI TEXT CHECK",
-                  )
-                  text_answer = (getattr(text_check, "text", None) or "").strip().upper()
-                  if "GEMINI TEXT CHECK" not in " ".join(text_answer.split()):
-                      raise RuntimeError("Gemini text response did not match the expected check")
-                  print("Gemini text key slot", index, "passed.")
+              for attempt in range(1, 4):
+                  try:
+                      client = genai.Client(api_key=key)
+                      text_check = client.models.generate_content(
+                          model=os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
+                          contents="Reply with exactly: GEMINI TEXT CHECK",
+                      )
+                      text_answer = (getattr(text_check, "text", None) or "").strip().upper()
+                      if "GEMINI TEXT CHECK" not in " ".join(text_answer.split()):
+                          raise RuntimeError("Gemini text response did not match the expected check")
+                      print("Gemini text key slot", index, "passed.")
 
-                  candidate = client.models.generate_content(
-                      model=os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
-                      contents=[
-                          "Read the exact text in this image. Reply with the words only.",
-                          types.Part.from_bytes(data=buf.getvalue(), mime_type="image/png"),
-                      ],
-                  )
-                  answer = (getattr(candidate, "text", None) or "").strip().upper()
-                  if "GEMINI VISION CHECK" in " ".join(answer.split()):
-                      response = candidate
-                      print("Gemini vision key slot", index, "passed.")
+                      candidate = client.models.generate_content(
+                          model=os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
+                          contents=[
+                              "Read the exact text in this image. Reply with the words only.",
+                              types.Part.from_bytes(data=buf.getvalue(), mime_type="image/png"),
+                          ],
+                      )
+                      answer = (getattr(candidate, "text", None) or "").strip().upper()
+                      if "GEMINI VISION CHECK" in " ".join(answer.split()):
+                          response = candidate
+                          print("Gemini vision key slot", index, "passed.")
+                          break
+                      errors.append(f"key slot {index}: image text not recognized")
                       break
-                  errors.append(f"key slot {index}: image text not recognized")
-              except Exception as exc:
-                  detail = str(exc).replace(key, "[REDACTED]")[:240]
-                  errors.append(f"key slot {index}: {type(exc).__name__}: {detail}")
+                  except Exception as exc:
+                      detail = str(exc).replace(key, "[REDACTED]")
+                      lowered = detail.lower()
+                      if "429" in lowered or "quota" in lowered or "resource_exhausted" in lowered:
+                          raise SystemExit("Gemini quota/rate limit reached; no key rotation attempted.")
+                      temporary = any(token in lowered for token in ("503", "500", "unavailable", "internal server error"))
+                      if temporary and attempt < 3:
+                          time.sleep(5 * attempt)
+                          continue
+                      errors.append(f"key slot {index}: {type(exc).__name__}: {detail[:240]}")
+                      break
+              if response is not None:
+                  break
           if response is None:
               raise SystemExit("FAIL: no configured Gemini key passed: " + "; ".join(errors))
           print("PASS: Gemini API authentication and multimodal text+image request succeeded.")

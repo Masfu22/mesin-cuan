@@ -110,7 +110,7 @@ jobs:
 
   gemini-live-smoke-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 6
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -158,24 +158,23 @@ jobs:
               try:
                   client = genai.Client(
                       api_key=key,
-                      http_options=types.HttpOptions(timeout=30000),
+                      http_options=types.HttpOptions(timeout=20000),
                   )
-                  candidate = client.interactions.create(
+                  response = client.models.generate_content(
                       model=model,
-                      input="Reply with exactly: GEMINI API CHECK PASSED",
-                      store=False,
+                      contents="Reply with exactly: GEMINI API CHECK PASSED",
+                      config=types.GenerateContentConfig(temperature=0),
                   )
-                  answer = (getattr(candidate, "output_text", None) or "").strip().upper()
+                  answer = (getattr(response, "text", None) or "").strip().upper()
                   if "GEMINI API CHECK PASSED" in " ".join(answer.split()):
                       print("Gemini key slot", index, "passed.")
-                      print("PASS: Gemini Interactions API authentication and text generation succeeded.")
+                      print("PASS: Gemini generate_content authentication and text generation succeeded.")
                       print("Model:", model)
                       print("Response content withheld from logs.")
                       sys.exit(0)
                   errors.append(f"key slot {index}: empty or unexpected output")
               except Exception as exc:
                   status = getattr(exc, "status_code", getattr(exc, "code", "unknown"))
-                  detail = str(getattr(exc, "message", exc))[:350]
-                  errors.append(f"key slot {index}: {type(exc).__name__} status={status} detail={detail}")
+                  errors.append(f"key slot {index}: {type(exc).__name__} status={status}")
           raise SystemExit("FAIL: no configured Gemini key passed: " + "; ".join(errors))
           PY

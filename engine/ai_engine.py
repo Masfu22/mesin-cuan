@@ -157,7 +157,7 @@ def _analyze_podcast(video_path: str, min_clips: int,
         "podcast text",
         [
             ("NVIDIA", lambda: _nvidia_text(nvidia_key, NVIDIA_TEXT_MODEL, prompt)) if nvidia_key else None,
-            ("Gemini", lambda: _gemini_text(prompt)) if os.getenv("GEMINI_API_KEY", "").strip() else None,
+            ("Gemini", lambda: _gemini_text(prompt)) if _gemini_api_keys() else None,
             ("Ollama", lambda: _ollama_text(OLLAMA_TEXT_MODEL, prompt)),
         ],
     )

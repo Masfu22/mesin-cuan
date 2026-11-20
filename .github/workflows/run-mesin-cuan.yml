@@ -86,6 +86,7 @@ jobs:
           PROVIDER_B_BASE_URL: ${{ secrets.PROVIDER_B_BASE_URL }}
           PROVIDER_B_MODEL: ${{ secrets.PROVIDER_B_MODEL }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
@@ -146,7 +147,7 @@ jobs:
           env_keys = [
               "YOUTUBE_API_KEY", "PROVIDER_A_API_KEY", "PROVIDER_A_BASE_URL",
               "PROVIDER_A_MODEL", "PROVIDER_B_API_KEY", "PROVIDER_B_BASE_URL",
-              "PROVIDER_B_MODEL", "GEMINI_API_KEY", "GROQ_API_KEY",
+              "PROVIDER_B_MODEL", "GEMINI_API_KEY", "GEMINI_MODEL", "GROQ_API_KEY",
               "ANTHROPIC_API_KEY", "NVIDIA_API_KEY", "NVIDIA_BASE_URL", "NVIDIA_MODEL", "OLLAMA_BASE_URL",
               "OLLAMA_API_KEY", "OLLAMA_MODEL", "PERPLEXITY_API_KEY",
               "PEXELS_API_KEY", "PIXABAY_API_KEY", "COVERR_API_KEY",

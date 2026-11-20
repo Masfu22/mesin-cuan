@@ -95,7 +95,10 @@ class GeminiAndQCSafetyTests(unittest.TestCase):
             "GEMINI_API_KEY": "first-key",
             "GEMINI_API_KEY_2": "second-key",
             "GEMINI_MODEL": "gemini-3.5-flash-lite",
-        }, clear=False), patch("google.genai.Client", side_effect=client_factory):
+        }, clear=False), patch("google.genai.Client", side_effect=client_factory), \
+             patch.object(script_engine, "_parse_json_response", return_value={
+                 "title": "Uji Rotasi Gemini", "script": "script"
+             }):
             result = script_engine._call_gemini("system", "user", "shorts")
 
         self.assertEqual(calls, ["first-key", "second-key"])

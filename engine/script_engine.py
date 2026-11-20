@@ -652,35 +652,50 @@ def _call_groq(system_prompt: str, user_message: str, profile: str) -> dict:
 
 # ─── NVIDIA NIM ───────────────────────────────────────────────────────────────
 def _call_nvidia(system_prompt: str, user_message: str, profile: str) -> dict:
-    """Generate script melalui endpoint OpenAI-compatible NVIDIA NIM."""
+    """Generate script melalui NVIDIA NIM OpenAI-compatible SDK."""
+    from openai import OpenAI
+
     api_key = require_env("NVIDIA_API_KEY")
     base_url = (os.getenv("NVIDIA_BASE_URL", "").strip() or "https://integrate.api.nvidia.com/v1").rstrip("/")
     model = os.getenv("NVIDIA_MODEL", "").strip() or "nvidia/nemotron-3.5-super-vl-120b-a12b"
     max_tokens = SCRIPT_MAX_TOKENS_LONGFORM if profile == "long_form" else SCRIPT_MAX_TOKENS_SHORTS
-    payload = {
-        "model": model,
-        "messages": [
+
+    client = OpenAI(base_url=base_url, api_key=api_key, timeout=300.0)
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
             {"role": "system", "content": system_prompt + "\n\nReturn only a valid JSON object."},
             {"role": "user", "content": user_message + _get_length_hint(profile)},
         ],
-        "temperature": 0.7,
-        "max_tokens": max_tokens,
-        "stream": False,
-    }
-    response = _post_json_no_proxy(
-        f"{base_url}/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        payload=payload,
-        timeout=300,
+        temperature=0.7,
+        max_tokens=max_tokens,
+        stream=False,
     )
-    response.raise_for_status()
-    raw = response.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-    if not raw:
-        raise RuntimeError("NVIDIA NIM mengembalikan respons kosong")
-    result = _parse_json_response(raw, profile)
+
+    if not response.choices:
+        raise RuntimeError("NVIDIA NIM mengembalikan choices kosong")
+    message = response.choices[0].message
+    raw = message.content
+    if isinstance(raw, list):
+        raw = "".join(
+            part.get("text", "") if isinstance(part, dict) else getattr(part, "text", "")
+            for part in raw
+        )
+    if not isinstance(raw, str) or not raw.strip():
+        # Beberapa model reasoning mengirim teks pada reasoning_content.
+        reasoning = getattr(message, "reasoning_content", None)
+        if isinstance(reasoning, str) and reasoning.strip():
+            raw = reasoning
+        else:
+            finish = getattr(response.choices[0], "finish_reason", None)
+            raise RuntimeError(
+                f"NVIDIA NIM tidak mengirim message.content (finish_reason={finish}); "
+                "periksa kecocokan model dan endpoint NIM"
+            )
+
+    result = _parse_json_response(raw.strip(), profile)
     result["generator_model"] = model
     return result
-
 
 # ─── Gemini ───────────────────────────────────────────────────────────────────
 
@@ -700,43 +715,59 @@ def _gemini_api_keys() -> list[str]:
 
 
 def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
+    """Generate script via Gemini Interactions API; rotate configured keys on failure."""
     from google import genai
 
     keys = _gemini_api_keys()
     if not keys:
         raise RuntimeError("Tidak ada GEMINI_API_KEY yang dikonfigurasi")
+
+    model = (os.getenv("GEMINI_MODEL", "").strip() or "gemini-3.8-flash")
+    max_attempts = MAX_JSON_RETRY
     errors = []
+    prompt = (
+        system_prompt
+        + "\n\n"
+        + user_message
+        + _get_length_hint(profile)
+        + "\n\nReturn ONLY one valid JSON object. Do not use Markdown fences."
+    )
+
     for key_index, api_key in enumerate(keys, start=1):
         client = genai.Client(api_key=api_key)
-        for attempt in range(1, MAX_JSON_RETRY + 1):
-            user_msg = user_message + _get_length_hint(profile)
-            if attempt > 1:
-                user_msg += f"\n\n[ATTEMPT {attempt}] Output ONLY valid JSON, no markdown."
-            prompt = f"{system_prompt}\n\n{user_msg}"
+        for attempt in range(1, max_attempts + 1):
             try:
-                resp = client.models.generate_content(
-                    model=(os.getenv("GEMINI_MODEL", "").strip() or "gemini-2.5-flash"),
-                    contents=prompt,
+                interaction = client.interactions.create(
+                    model=model,
+                    input=prompt,
                 )
-                if not resp.text:
-                    raise ValueError("Gemini returned empty response")
-                result = _parse_json_response(resp.text.strip(), profile)
-                logger.info(f"Gemini key slot {key_index} berhasil")
+                raw = getattr(interaction, "output_text", None)
+                if not isinstance(raw, str) or not raw.strip():
+                    raise ValueError("Gemini Interactions API returned empty output_text")
+                result = _parse_json_response(raw.strip(), profile)
+                result["generator_model"] = model
+                logger.info(f"Gemini Interactions key slot {key_index} berhasil")
                 return result
             except (json.JSONDecodeError, ValueError) as exc:
-                logger.warning(f"Gemini key slot {key_index}, attempt {attempt}/{MAX_JSON_RETRY}: JSON gagal — {exc}")
+                logger.warning(
+                    f"Gemini Interactions key slot {key_index}, attempt {attempt}/{max_attempts}: {exc}"
+                )
                 errors.append(f"key {key_index}: {type(exc).__name__}")
-                if attempt == MAX_JSON_RETRY:
+                if attempt == max_attempts:
                     break
             except Exception as exc:
-                err_str = str(exc).lower()
+                err = str(exc).lower()
                 errors.append(f"key {key_index}: {type(exc).__name__}")
-                if "429" in err_str or "quota" in err_str or "rate" in err_str:
-                    logger.warning(f"Gemini key slot {key_index} terkena rate limit; mencoba key berikutnya")
-                    break
-                raise
-    raise RuntimeError("Semua Gemini API key gagal: " + "; ".join(errors))
+                # Model/API yang salah tidak akan sembuh dengan mengganti key; hentikan
+                # agar penyebab sebenarnya terlihat dan provider waterfall berlanjut.
+                if any(token in err for token in ("404", "not_found", "model", "invalid_argument")):
+                    raise RuntimeError(f"Gemini Interactions API model={model}: {exc}") from exc
+                logger.warning(
+                    f"Gemini key slot {key_index} gagal ({type(exc).__name__}); mencoba key berikutnya"
+                )
+                break
 
+    raise RuntimeError("Semua Gemini API key gagal: " + "; ".join(errors))
 
 # ─── Anthropic ────────────────────────────────────────────────────────────────
 

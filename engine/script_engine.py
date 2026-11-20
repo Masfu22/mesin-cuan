@@ -846,7 +846,7 @@ def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
                 raise
 
             # Google sering menyertakan retryDelay seperti 'retryDelay: 32s'.
-            match = re.search(r"retryDelay['\" ]*[:=]['\" ]*(\\d+(?:\\.\\d+)?)s", err_str, re.IGNORECASE)
+            match = re.search(r"retryDelay['\" ]*[:=]['\" ]*(\d+(?:\.\d+)?)s", err_str, re.IGNORECASE)
             if match:
                 wait = float(match.group(1))
             else:

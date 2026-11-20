@@ -216,19 +216,19 @@ def _call_ai(system_prompt: str, user_message: str, profile: str = "shorts") -> 
     if cfg_b["base_url"] and cfg_b["api_key"]:
         primary_providers.append(("Provider-B", lambda: _call_provider_b(system_prompt, user_message, profile)))
 
-    # Pertahankan fallback asli Groq; Ollama Cloud ditambahkan sebagai
-    # fallback berikutnya, lalu provider opsional lainnya.
+    # Pertahankan urutan fallback upstream yang telah digunakan:
+    # Groq → Gemini → Anthropic. Provider tambahan ditempatkan setelahnya.
     fallback_providers = []
     if os.getenv("GROQ_API_KEY", "").strip():
         fallback_providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
-    if os.getenv("OLLAMA_API_KEY", "").strip():
-        fallback_providers.append(("Ollama Cloud", lambda: _call_ollama_cloud(system_prompt, user_message, profile)))
     if _gemini_api_keys():
         fallback_providers.append(("Gemini", lambda: _call_gemini(system_prompt, user_message, profile)))
     if os.getenv("ANTHROPIC_API_KEY", "").strip():
         fallback_providers.append(("Anthropic", lambda: _call_anthropic(system_prompt, user_message, profile)))
     if os.getenv("NVIDIA_API_KEY", "").strip():
         fallback_providers.append(("NVIDIA NIM", lambda: _call_nvidia(system_prompt, user_message, profile)))
+    if os.getenv("OLLAMA_API_KEY", "").strip():
+        fallback_providers.append(("Ollama Cloud", lambda: _call_ollama_cloud(system_prompt, user_message, profile)))
     providers = primary_providers + fallback_providers
     if not providers:
         raise RuntimeError("Tidak ada AI provider aktif. Isi minimal satu API key atau konfigurasi Provider-A/B.")

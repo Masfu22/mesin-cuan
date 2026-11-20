@@ -264,10 +264,24 @@ def _build_provider_order(scorer_provider: str) -> list[str]:
     has_b = bool(cfg_b["api_key"])
 
     available = {"provider_a": has_a, "provider_b": has_b}
-    order = [slot for slot in (preferred, fallback) if available[slot]]
+    order = []
 
-    order.append("groq")
-    return order if order else ["groq"]
+    # Cross-provider scoring: prefer Gemini when NVIDIA generated the draft.
+    gemini_keys = [
+        os.getenv("GEMINI_API_KEY", "").strip(),
+        *[os.getenv(f"GEMINI_API_KEY_{i}", "").strip() for i in range(2, 11)],
+        *[value.strip() for value in os.getenv("GEMINI_API_KEYS", "").split(",")],
+    ]
+    if any(gemini_keys):
+        order.append("gemini")
+    order.extend(slot for slot in (preferred, fallback) if available[slot])
+    if os.getenv("NVIDIA_API_KEY", "").strip():
+        order.append("nvidia")
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        order.append("anthropic")
+    if os.getenv("GROQ_API_KEY", "").strip():
+        order.append("groq")
+    return list(dict.fromkeys(order))
 
 
 def _call_provider(provider: str, prompt: str) -> str:
@@ -276,6 +290,73 @@ def _call_provider(provider: str, prompt: str) -> str:
         return _call_provider_a(prompt)
     elif provider == "provider_b":
         return _call_provider_b(prompt)
+    elif provider == "gemini":
+        from google import genai
+        keys = []
+        for name in ["GEMINI_API_KEY"] + [f"GEMINI_API_KEY_{i}" for i in range(2, 11)]:
+            value = os.getenv(name, "").strip()
+            if value and value not in keys:
+                keys.append(value)
+        for value in os.getenv("GEMINI_API_KEYS", "").split(","):
+            value = value.strip()
+            if value and value not in keys:
+                keys.append(value)
+        if not keys:
+            raise RuntimeError("GEMINI_API_KEY tidak tersedia")
+        model = os.getenv("GEMINI_MODEL", "").strip() or "gemini-3.8-flash"
+        errors = []
+        for index, key in enumerate(keys, start=1):
+            try:
+                response = genai.Client(api_key=key).interactions.create(
+                    model=model,
+                    input="Return ONLY valid JSON.\\n\\n" + prompt,
+                )
+                raw = getattr(response, "output_text", None)
+                if isinstance(raw, str) and raw.strip():
+                    return raw.strip()
+                raise ValueError("Gemini scorer mengembalikan output kosong")
+            except Exception as exc:
+                errors.append(f"key {index}: {type(exc).__name__}")
+        raise RuntimeError("Semua Gemini scorer key gagal: " + "; ".join(errors))
+    elif provider == "nvidia":
+        from openai import OpenAI
+        client = OpenAI(
+            base_url=(os.getenv("NVIDIA_BASE_URL", "").strip() or "https://integrate.api.nvidia.com/v1").rstrip("/"),
+            api_key=os.getenv("NVIDIA_API_KEY", "").strip(),
+            timeout=120.0,
+            max_retries=1,
+        )
+        model = os.getenv("NVIDIA_MODEL", "").strip() or "nvidia/nemotron-3.5-super-vl-120b-a12b"
+        stream = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a strict content quality evaluator. Output JSON only."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.15,
+            top_p=0.9,
+            max_tokens=SCORER_MAX_TOKENS,
+            stream=True,
+        )
+        parts = []
+        for chunk in stream:
+            if chunk.choices:
+                content = getattr(chunk.choices[0].delta, "content", None)
+                if isinstance(content, str):
+                    parts.append(content)
+        raw = "".join(parts).strip()
+        if not raw:
+            raise RuntimeError("NVIDIA scorer mengembalikan output kosong")
+        return raw
+    elif provider == "anthropic":
+        import anthropic
+        response = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", "").strip()).messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=SCORER_MAX_TOKENS,
+            system="You are a strict content quality evaluator. Output JSON only.",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text.strip()
     elif provider == "groq":
         return _call_groq(prompt)
     raise ValueError(f"Unknown provider: {provider}")

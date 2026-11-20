@@ -783,7 +783,7 @@ def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
     if not keys:
         raise RuntimeError("Tidak ada GEMINI_API_KEY yang dikonfigurasi")
 
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
     errors = []
     for key_index, api_key in enumerate(keys, start=1):
         client = genai.Client(api_key=api_key)

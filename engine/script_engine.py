@@ -1874,7 +1874,23 @@ def _review_script_payload(script_data: dict, channel: dict, threshold: float, m
         primary_reviewers.append("provider_b")
 
     random.shuffle(primary_reviewers)
-    providers = primary_reviewers + ["Groq"]
+    # Gratis/cadangan yang memang tersedia harus ikut reviewer waterfall.
+    # Gemini didahulukan karena secret-nya tersedia pada workflow pengguna.
+    if _gemini_api_keys():
+        primary_reviewers.insert(0, "Gemini")
+    if os.getenv("NVIDIA_API_KEY", "").strip():
+        primary_reviewers.append("NVIDIA")
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        primary_reviewers.append("Anthropic")
+    if os.getenv("GROQ_API_KEY", "").strip():
+        primary_reviewers.append("Groq")
+    providers = list(dict.fromkeys(primary_reviewers))
+
+    if not providers:
+        raise RuntimeError(
+            "Tidak ada reviewer AI aktif. Konfigurasikan Gemini, NVIDIA, "
+            "Provider A/B, Groq, atau Anthropic."
+        )
 
     last_error = None
     for provider in providers:
@@ -1941,6 +1957,79 @@ def _call_review_provider(provider: str, prompt: str) -> str:
                 last_error = exc
                 logger.warning(f"Review Provider-{slot.upper()} model={model_name} gagal: {exc}")
         raise RuntimeError(f"Review Provider-{slot.upper()} gagal di semua model. Error terakhir: {last_error}")
+
+    if provider == "Gemini":
+        from google import genai
+
+        keys = _gemini_api_keys()
+        if not keys:
+            raise RuntimeError("Tidak ada GEMINI_API_KEY untuk reviewer")
+        model = (os.getenv("GEMINI_MODEL", "").strip() or "gemini-3.8-flash")
+        errors = []
+        for key_index, api_key in enumerate(keys, start=1):
+            try:
+                client = genai.Client(api_key=api_key)
+                interaction = client.interactions.create(
+                    model=model,
+                    input=(
+                        "You are a ruthless retention-first YouTube Shorts editor. "
+                        "Return ONLY valid JSON matching the requested schema.\\n\\n"
+                        + prompt
+                    ),
+                )
+                raw = getattr(interaction, "output_text", None)
+                if isinstance(raw, str) and raw.strip():
+                    logger.info(f"Gemini reviewer key slot {key_index} berhasil")
+                    return raw.strip()
+                raise ValueError("Gemini reviewer mengembalikan output kosong")
+            except Exception as exc:
+                errors.append(f"key {key_index}: {type(exc).__name__}")
+                logger.warning(f"Gemini reviewer key slot {key_index} gagal: {exc}")
+        raise RuntimeError("Semua Gemini reviewer key gagal: " + "; ".join(errors))
+
+    if provider == "NVIDIA":
+        from openai import OpenAI
+
+        client = OpenAI(
+            base_url=(os.getenv("NVIDIA_BASE_URL", "").strip() or "https://integrate.api.nvidia.com/v1").rstrip("/"),
+            api_key=require_env("NVIDIA_API_KEY"),
+            timeout=180.0,
+            max_retries=1,
+        )
+        model = os.getenv("NVIDIA_MODEL", "").strip() or "nvidia/nemotron-3.5-super-vl-120b-a12b"
+        stream = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a ruthless retention-first YouTube Shorts editor. Return ONLY valid JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.35,
+            top_p=0.95,
+            max_tokens=SCRIPT_REVIEW_MAX_TOKENS,
+            stream=True,
+        )
+        parts = []
+        for chunk in stream:
+            if chunk.choices:
+                content = getattr(chunk.choices[0].delta, "content", None)
+                if isinstance(content, str):
+                    parts.append(content)
+        raw = "".join(parts).strip()
+        if not raw:
+            raise RuntimeError("NVIDIA reviewer mengembalikan output kosong")
+        return raw
+
+    if provider == "Anthropic":
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=require_env("ANTHROPIC_API_KEY"))
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=SCRIPT_REVIEW_MAX_TOKENS,
+            system="You are a ruthless retention-first YouTube Shorts editor. Return ONLY valid JSON.",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text.strip()
 
     if provider == "Groq":
         from groq import Groq

@@ -60,11 +60,19 @@ def _get_drive_service(channel: dict):
     from googleapiclient.discovery import build
     from google.oauth2.credentials import Credentials
 
-    cred_file  = channel.get("credentials_file", "")
-    token_file = cred_file.replace("_token.json", "_v2.json")
+    cred_file = channel.get("credentials_file", "")
+    if not cred_file:
+        raise ValueError(f"credentials_file belum dikonfigurasi untuk channel {channel.get('id', '?')}")
+
+    # Gunakan satu nama/path kanonis dari config/settings.json.
+    # Backward compatibility: baca *_v2.json hanya jika file kanonis belum ada.
+    token_file = cred_file
+    legacy_file = cred_file.replace("_token.json", "_v2.json")
+    if not os.path.exists(token_file) and legacy_file != token_file and os.path.exists(legacy_file):
+        token_file = legacy_file
 
     if not os.path.exists(token_file):
-        raise FileNotFoundError(f"Token tidak ditemukan: {token_file}")
+        raise FileNotFoundError(f"Token Google Drive tidak ditemukan: {cred_file}")
 
     creds = Credentials.from_authorized_user_file(token_file)
 

@@ -742,6 +742,7 @@ def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
     models = _gemini_model_candidates()
     max_attempts = MAX_JSON_RETRY
     errors = []
+    total_deadline = time.monotonic() + 180
     prompt = (
         system_prompt
         + "\n\n"
@@ -752,11 +753,16 @@ def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
 
     for model in models:
         for key_index, api_key in enumerate(keys, start=1):
+            if time.monotonic() >= total_deadline:
+                raise RuntimeError("Batas waktu total Gemini script 180 detik tercapai")
+            remaining_ms = max(1000, min(45000, int((total_deadline - time.monotonic()) * 1000)))
             client = genai.Client(
                 api_key=api_key,
-                http_options=types.HttpOptions(timeout=60000),
+                http_options=types.HttpOptions(timeout=remaining_ms),
             )
             for attempt in range(1, max_attempts + 1):
+                if time.monotonic() >= total_deadline:
+                    break
                 try:
                     response = client.models.generate_content(
                         model=model,

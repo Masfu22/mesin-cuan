@@ -773,7 +773,7 @@ def _gemini_api_keys() -> list:
 
 
 def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
-    """Generate a script with Gemini, rotating through all configured API keys."""
+    """Generate a script with Gemini; rotate invalid keys and retry temporary server errors."""
     try:
         from google import genai
     except ImportError as exc:
@@ -809,7 +809,16 @@ def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
                     continue
                 break
             except Exception as exc:
-                errors.append(f"key slot {key_index}: {type(exc).__name__}")
+                detail = str(exc).lower()
+                if "429" in detail or "quota" in detail or "resource_exhausted" in detail:
+                    raise RuntimeError("Gemini rate limit/kuota tercapai; lanjutkan ke provider fallback tanpa memutar key.") from exc
+                temporary = any(token in detail for token in ("503", "500", "unavailable", "internal server error"))
+                errors.append(f"key slot {key_index}, attempt {attempt}: {type(exc).__name__}")
+                if temporary and attempt < MAX_JSON_RETRY:
+                    wait = 5 * attempt
+                    logger.warning(f"Gemini sementara tidak tersedia; retry {attempt + 1}/{MAX_JSON_RETRY} dalam {wait}s")
+                    time.sleep(wait)
+                    continue
                 logger.warning(f"Gemini key slot {key_index} gagal ({type(exc).__name__}); mencoba key berikutnya")
                 break
 

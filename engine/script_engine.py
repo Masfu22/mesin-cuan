@@ -412,9 +412,11 @@ def _call_ollama_cloud(system_prompt: str, user_message: str, profile: str) -> d
     if not api_key:
         raise RuntimeError("OLLAMA_API_KEY belum tersedia di GitHub Secrets.")
     base_url = os.getenv("OLLAMA_BASE_URL", "https://ollama.com").strip().rstrip("/")
-    if not base_url.startswith("https://"):
-        raise RuntimeError("OLLAMA_BASE_URL harus menggunakan HTTPS.")
-    model = os.getenv("OLLAMA_MODEL", "gpt-oss:20b").strip()\n    if model.endswith("-cloud"):\n        model = model[:-6]
+    if base_url != "https://ollama.com":
+        raise RuntimeError("OLLAMA_BASE_URL harus tepat https://ollama.com (tanpa /api).")
+    model = os.getenv("OLLAMA_MODEL", "gpt-oss:20b").strip()
+    if model.endswith("-cloud"):
+        model = model[:-6]
     if not model:
         raise RuntimeError("OLLAMA_MODEL kosong.")
     max_tokens = SCRIPT_MAX_TOKENS_LONGFORM if profile == "long_form" else SCRIPT_MAX_TOKENS_SHORTS

@@ -26,8 +26,10 @@ jobs:
 
           base = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/") or "https://ollama.com"
           key = os.getenv("OLLAMA_API_KEY", "").strip()
-          model = os.getenv("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
+          model = os.getenv("OLLAMA_MODEL", "").strip() or "glm-5.3-flash:cloud"
           if model.endswith("-cloud"):
+              model = model[:-6]
+          elif model.endswith(":cloud"):
               model = model[:-6]
 
           if not key:
@@ -56,7 +58,7 @@ jobs:
 
           base = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/") or "https://ollama.com"
           key = os.environ["OLLAMA_API_KEY"].strip()
-          model = os.getenv("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
+          model = os.getenv("OLLAMA_MODEL", "").strip() or "glm-5.3-flash:cloud"
           if model.endswith("-cloud"):
               model = model[:-6]
           payload = {

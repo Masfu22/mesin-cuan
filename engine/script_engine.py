@@ -1,7 +1,7 @@
 """
 script_engine.py - Generate script narasi video dari topik
 
-Primary  : Dual Parallel Generation (Provider-A + Provider-B) dengan Cross-Provider Scoring
+Primary  : Ollama Cloud (jika dikonfigurasi), selain itu Dual Parallel Provider-A/B
            Generator A: Provider-A → Scored by: Provider-B
            Generator B: Provider-B → Scored by: Provider-A
            Winner (score tertinggi) yang lanjut ke TTS.
@@ -156,12 +156,17 @@ def generate(topic_data: dict, channel: dict, profile: str = "shorts") -> dict:
         user_message = f"{prefix}: {topic}{part_instruction}"
 
 
-    # ── Dual Parallel Generation + Cross-Provider Scoring ──────────────────
-    result = _generate_and_pick_best(system_prompt, user_message, profile, ch_id, channel=channel)
-    if result is None:
-        # Fallback: sequential waterfall (existing behavior, tidak ada perubahan)
-        logger.info(f"[{ch_id}] Parallel scorer tidak menghasilkan winner → fallback ke sequential")
+    # Ollama Cloud menjadi generator pertama jika Secret tersedia.
+    # Jalur parallel Provider-A/B tetap dipertahankan untuk konfigurasi tanpa Ollama.
+    if os.getenv("OLLAMA_API_KEY", "").strip():
+        logger.info(f"[{ch_id}] Ollama Cloud aktif — gunakan waterfall berurutan")
         result = _call_ai(system_prompt, user_message, profile=profile)
+    else:
+        # ── Dual Parallel Generation + Cross-Provider Scoring ───────────────
+        result = _generate_and_pick_best(system_prompt, user_message, profile, ch_id, channel=channel)
+        if result is None:
+            logger.info(f"[{ch_id}] Parallel scorer tidak menghasilkan winner → fallback ke sequential")
+            result = _call_ai(system_prompt, user_message, profile=profile)
     result["topic"]              = topic
     result["profile"]            = profile
     result["is_viral_iteration"] = is_viral_iteration
@@ -210,15 +215,15 @@ def _call_ai(system_prompt: str, user_message: str, profile: str = "shorts") -> 
     cfg_a = get_provider_config("a")
     cfg_b = get_provider_config("b")
     primary_providers = []
+    if os.getenv("OLLAMA_API_KEY", "").strip():
+        primary_providers.append(("Ollama Cloud", lambda: _call_ollama_cloud(system_prompt, user_message, profile)))
     if cfg_a["base_url"] and cfg_a["api_key"]:
         primary_providers.append(("Provider-A", lambda: _call_provider_a(system_prompt, user_message, profile)))
     if cfg_b["base_url"] and cfg_b["api_key"]:
         primary_providers.append(("Provider-B", lambda: _call_provider_b(system_prompt, user_message, profile)))
 
-    # Cloud fallback berurutan; provider tanpa Secret dilewati otomatis.
+    # Fallback berurutan; provider tanpa Secret dilewati otomatis.
     fallback_providers = []
-    if os.getenv("OLLAMA_API_KEY", "").strip():
-        fallback_providers.append(("Ollama Cloud", lambda: _call_ollama_cloud(system_prompt, user_message, profile)))
     if os.getenv("GROQ_API_KEY", "").strip():
         fallback_providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
     if os.getenv("GEMINI_API_KEY", "").strip():

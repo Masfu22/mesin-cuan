@@ -414,8 +414,10 @@ def _call_ollama_cloud(system_prompt: str, user_message: str, profile: str) -> d
     base_url = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/") or "https://ollama.com"
     if base_url != "https://ollama.com":
         raise RuntimeError("OLLAMA_BASE_URL harus tepat https://ollama.com (tanpa /api).")
-    model = os.getenv("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
+    model = os.getenv("OLLAMA_MODEL", "").strip() or "glm-5.3-flash:cloud"
     if model.endswith("-cloud"):
+        model = model[:-6]
+    elif model.endswith(":cloud"):
         model = model[:-6]
     if not model:
         raise RuntimeError("OLLAMA_MODEL kosong.")

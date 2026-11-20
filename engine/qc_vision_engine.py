@@ -25,15 +25,15 @@ import json
 import time
 import subprocess
 import tempfile
-from engine.utils import get_logger, require_env
+from engine.utils import get_logger, get_gemini_api_keys
 
 logger = get_logger("qc_vision")
 
 # Model yang dipakai (urutan fallback)
 GEMINI_MODELS = [
-    "gemini-1.5-flash",
-    "gemini-2.0-flash",
-    "gemini-2.5-flash",
+    os.getenv("GEMINI_MODEL", "").strip(),
+    "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
 ]
 
 # Batas waktu tunggu video diproses Gemini (detik)
@@ -44,85 +44,92 @@ PROCESSING_TIMEOUT = 120
 
 def review_video(video_path: str, thumbnail_path: str,
                  script_data: dict, channel: dict, profile: str = "shorts") -> dict:
-    """
-    Review video dengan Gemini Vision.
-
-    Return: {
-        "status":    "APPROVED" | "NEEDS_FIX",
-        "score":     int (1-10),
-        "issues":    [{"aspect": str, "problem": str, "suggestion": str}, ...],
-        "summary":   str,
-        "auto_fixable": [str, ...],   ← masalah yang bisa di-fix otomatis
-        "model_used": str,
-    }
-    """
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        logger.warning("GEMINI_API_KEY tidak ada — skip QC vision, langsung upload")
-        return _approved_result("GEMINI_API_KEY tidak dikonfigurasi")
-
+    """Review video via modern google-genai SDK; never approve an unreviewed file."""
     if not os.path.exists(video_path):
-        logger.warning(f"Video tidak ditemukan: {video_path} — skip QC")
-        return _approved_result("Video tidak ditemukan")
-
-    logger.info(f"[{channel['id']}] Memulai QC vision dengan Gemini...")
-
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-    except ImportError:
-        logger.warning("google-generativeai tidak terinstall — skip QC")
-        return _approved_result("google-generativeai tidak terinstall")
-
-    # Upload video ke Gemini File API
-    video_file = _upload_to_gemini(video_path)
-    if not video_file:
-        return _approved_result("Gagal upload video ke Gemini")
+        return _qc_error(f"Video tidak ditemukan: {video_path}")
+    keys = get_gemini_api_keys()
+    if not keys:
+        return _qc_error("Tidak ada Gemini API key untuk QC Vision")
 
     try:
-        # Buat prompt QC yang komprehensif
-        prompt = _build_qc_prompt(script_data, channel, profile)
+        from google import genai
+        from google.genai import types
+    except ImportError as exc:
+        return _qc_error(f"SDK google-genai tidak tersedia: {exc}")
 
-        # Coba tiap model sampai berhasil
-        result = None
-        model_used = None
+    prompt = _build_qc_prompt(script_data, channel, profile)
+    models = list(dict.fromkeys(model for model in GEMINI_MODELS if model))
+    errors = []
 
-        for model_name in GEMINI_MODELS:
-            try:
-                logger.info(f"Mencoba model: {model_name}...")
-                import google.generativeai as genai
-                model    = genai.GenerativeModel(model_name=model_name)
-                response = model.generate_content(
-                    [video_file, prompt],
-                    generation_config={"temperature": 0.2}
-                )
-                result     = response.text
-                model_used = model_name
-                logger.info(f"QC berhasil dengan {model_name}")
-                break
-            except Exception as e:
-                logger.warning(f"Model {model_name} gagal: {e}")
-                continue
+    logger.info(f"[{channel['id']}] QC Vision modern SDK; tersedia {len(keys)} Gemini key")
+    for key_index, api_key in enumerate(keys, start=1):
+        client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=120000))
+        video_file = None
+        try:
+            size_mb = os.path.getsize(video_path) / (1024 * 1024)
+            logger.info(f"Upload video QC ({size_mb:.1f} MB), key slot {key_index}")
+            video_file = client.files.upload(file=video_path)
+            deadline = time.time() + PROCESSING_TIMEOUT
+            while True:
+                state = getattr(getattr(video_file, "state", None), "name", str(getattr(video_file, "state", ""))).upper()
+                if state.endswith("ACTIVE"):
+                    break
+                if state.endswith("FAILED"):
+                    raise RuntimeError("Gemini gagal memproses file video")
+                if not state.endswith("PROCESSING"):
+                    # Some SDK responses omit state once the file is ready.
+                    if state:
+                        break
+                if time.time() >= deadline:
+                    raise TimeoutError("Timeout pemrosesan video Gemini")
+                time.sleep(5)
+                video_file = client.files.get(name=video_file.name)
 
-        if not result:
-            logger.warning("Semua model Gemini gagal — skip QC, langsung upload")
-            return _approved_result("Semua model Gemini gagal")
+            for model_name in models:
+                try:
+                    logger.info(f"QC mencoba model {model_name}, key slot {key_index}")
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=[video_file, prompt],
+                        config=types.GenerateContentConfig(temperature=0.2),
+                    )
+                    raw = getattr(response, "text", None)
+                    if not isinstance(raw, str) or not raw.strip():
+                        raise ValueError("Respons QC Gemini kosong")
+                    result = _parse_qc_response(raw, model_name)
+                    if result.get("status") not in ("APPROVED", "NEEDS_FIX"):
+                        raise ValueError(result.get("summary", "Respons QC tidak valid"))
+                    logger.info(f"QC selesai: {result['status']} | {result['score']}/10 | {model_name}")
+                    return result
+                except Exception as exc:
+                    errors.append(f"key{key_index}/{model_name}:{type(exc).__name__}")
+                    logger.warning(f"QC model {model_name}, key slot {key_index} gagal: {type(exc).__name__}")
+        except Exception as exc:
+            errors.append(f"key{key_index}:{type(exc).__name__}")
+            logger.warning(f"QC key slot {key_index} gagal: {type(exc).__name__}")
+        finally:
+            if video_file is not None:
+                try:
+                    client.files.delete(name=video_file.name)
+                except Exception as exc:
+                    logger.warning(f"Gagal menghapus file QC Gemini: {type(exc).__name__}")
 
-        # Parse hasil QC
-        qc_result = _parse_qc_response(result, model_used)
+    return _qc_error("Semua percobaan QC Gemini gagal: " + ", ".join(errors))
 
-        # Log ringkasan
-        logger.info(f"QC Result: {qc_result['status']} | Score: {qc_result['score']}/10")
-        for issue in qc_result.get("issues", []):
-            logger.info(f"  ⚠️  [{issue['aspect']}] {issue['problem']}")
-            logger.info(f"      → {issue['suggestion']}")
 
-        return qc_result
-
-    finally:
-        # Selalu hapus file dari Gemini setelah selesai
-        _delete_gemini_file(video_file)
-
+def _qc_error(reason: str) -> dict:
+    """QC_ERROR is deliberately not an approval; pipeline must stop before upload."""
+    logger.error("QC tidak dapat memverifikasi video: %s", reason)
+    return {
+        "status": "QC_ERROR",
+        "score": 0,
+        "summary": reason,
+        "issues": [{"aspect": "QC system", "severity": "HIGH", "problem": reason,
+                    "suggestion": "Perbaiki koneksi/API Gemini lalu jalankan ulang QC."}],
+        "auto_fixable": [],
+        "approved_aspects": [],
+        "model_used": "none",
+    }
 
 # ─── Auto-fix ────────────────────────────────────────────────────────────────
 
@@ -191,48 +198,7 @@ def auto_fix(video_path: str, thumbnail_path: str,
 
 # ─── Gemini File API ──────────────────────────────────────────────────────────
 
-def _upload_to_gemini(video_path: str):
-    """Upload video ke Gemini File API dan tunggu sampai selesai diproses."""
-    try:
-        import google.generativeai as genai
-
-        file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
-        logger.info(f"Uploading video ke Gemini ({file_size_mb:.1f}MB)...")
-
-        video_file = genai.upload_file(path=video_path)
-        logger.info(f"Upload selesai: {video_file.display_name}")
-
-        # Tunggu Gemini selesai proses video
-        deadline = time.time() + PROCESSING_TIMEOUT
-        while video_file.state.name == "PROCESSING":
-            if time.time() > deadline:
-                logger.error("Timeout menunggu Gemini proses video")
-                return None
-            logger.info("Gemini sedang memproses video...")
-            time.sleep(5)
-            video_file = genai.get_file(video_file.name)
-
-        if video_file.state.name == "FAILED":
-            logger.error("Gemini gagal memproses video")
-            return None
-
-        logger.info("Video siap dianalisa Gemini")
-        return video_file
-
-    except Exception as e:
-        logger.error(f"Gagal upload ke Gemini: {e}")
-        return None
-
-
-def _delete_gemini_file(video_file):
-    """Hapus file dari Gemini setelah selesai (hemat storage quota)."""
-    try:
-        import google.generativeai as genai
-        genai.delete_file(video_file.name)
-        logger.info("File dihapus dari Gemini")
-    except Exception as e:
-        logger.warning(f"Gagal hapus file dari Gemini: {e}")
-
+# File upload, polling, and cleanup are handled by the modern genai.Client in review_video().
 
 # ─── QC Prompt ───────────────────────────────────────────────────────────────
 
@@ -324,45 +290,41 @@ INFO VIDEO:
 # ─── Parse response ───────────────────────────────────────────────────────────
 
 def _parse_qc_response(raw: str, model_used: str) -> dict:
-    """Parse response JSON dari Gemini."""
+    """Parse and validate the QC decision; malformed output is never approved."""
     import re
-
-    # Clean markdown fencing
-    clean = raw.replace("```json", "").replace("```", "").strip()
-
-    # Extract JSON object
+    clean = (raw or "").replace("```json", "").replace("```", "").strip()
     if not clean.startswith("{"):
-        match = re.search(r'\{.*\}', clean, re.DOTALL)
-        if match:
-            clean = match.group()
-        else:
-            logger.warning(f"Tidak ada JSON di response Gemini: {raw[:200]}")
-            return _approved_result("Tidak bisa parse response Gemini")
-
+        match = re.search(r"\{.*\}", clean, re.DOTALL)
+        if not match:
+            return _qc_error("Respons Gemini tidak berisi JSON QC yang valid")
+        clean = match.group()
     try:
         data = json.loads(clean)
-        data["model_used"] = model_used
-
-        # Validasi field wajib
-        data.setdefault("status",           "APPROVED")
-        data.setdefault("score",            8)
-        data.setdefault("summary",          "")
-        data.setdefault("issues",           [])
-        data.setdefault("auto_fixable",     [])
-        data.setdefault("approved_aspects", [])
-
-        # Safety: kalau score >= 8 pastikan status APPROVED
-        if data["score"] >= 8:
-            data["status"] = "APPROVED"
-        elif data["score"] < 8 and data["status"] == "APPROVED":
-            data["status"] = "NEEDS_FIX"
-
-        return data
-
-    except json.JSONDecodeError as e:
-        logger.warning(f"JSON parse error: {e}\nRaw: {raw[:300]}")
-        return _approved_result("Parse error — video di-approve by default")
-
+    except json.JSONDecodeError as exc:
+        return _qc_error(f"JSON QC tidak valid: {exc}")
+    status = str(data.get("status", "")).upper()
+    if status not in ("APPROVED", "NEEDS_FIX"):
+        return _qc_error("Field status QC hilang atau tidak valid")
+    try:
+        score = int(data.get("score"))
+    except (TypeError, ValueError):
+        return _qc_error("Field score QC hilang atau bukan angka")
+    if not 1 <= score <= 10:
+        return _qc_error("Score QC harus berada pada rentang 1-10")
+    if score < 8:
+        status = "NEEDS_FIX"
+    elif status == "APPROVED":
+        status = "APPROVED"
+    else:
+        status = "NEEDS_FIX"
+    data["status"] = status
+    data["score"] = score
+    data["summary"] = str(data.get("summary", ""))
+    data["issues"] = data.get("issues") if isinstance(data.get("issues"), list) else []
+    data["auto_fixable"] = data.get("auto_fixable") if isinstance(data.get("auto_fixable"), list) else []
+    data["approved_aspects"] = data.get("approved_aspects") if isinstance(data.get("approved_aspects"), list) else []
+    data["model_used"] = model_used
+    return data
 
 # ─── Auto-fix implementations ─────────────────────────────────────────────────
 
@@ -463,13 +425,5 @@ def _fix_thumbnail_contrast(thumbnail_path: str) -> str | None:
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _approved_result(reason: str = "") -> dict:
-    """Return hasil APPROVED default (kalau QC tidak bisa jalan)."""
-    return {
-        "status":           "APPROVED",
-        "score":            8,
-        "summary":          reason or "Auto-approved",
-        "issues":           [],
-        "auto_fixable":     [],
-        "approved_aspects": [],
-        "model_used":       "none",
-    }
+    """Legacy helper kept for imports; failures now return QC_ERROR, never APPROVED."""
+    return _qc_error(reason or "QC tidak dapat dijalankan")

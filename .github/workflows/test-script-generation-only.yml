@@ -1,0 +1,95 @@
+name: Test script generation only (no upload)
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Channel untuk uji naskah
+        required: true
+        type: choice
+        options:
+          - ch_id_horror
+          - ch_id_psych
+          - ch_en_horror
+          - ch_en_psych
+      topic:
+        description: Topik uji
+        required: true
+        type: string
+        default: "Tes koneksi AI dan pembuatan naskah"
+      profile:
+        description: Format naskah
+        required: true
+        type: choice
+        default: shorts
+        options:
+          - shorts
+          - long_form
+
+permissions:
+  contents: read
+
+jobs:
+  script-only:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: "1"
+      OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
+      OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+      OLLAMA_MODEL: ${{ secrets.OLLAMA_MODEL }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+      GEMINI_MAX_RETRIES: "2"
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install FFmpeg and system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libsndfile1
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check AI configuration without revealing secrets
+        run: |
+          python - <<'PY'
+          import os
+          has_ollama = bool(os.getenv("OLLAMA_BASE_URL", "").strip() and os.getenv("OLLAMA_API_KEY", "").strip())
+          has_fallback = any(os.getenv(k, "").strip() for k in ("GROQ_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"))
+          print("Ollama Cloud:", "configured" if has_ollama else "missing")
+          print("Fallback provider:", "configured" if has_fallback else "none")
+          if not (has_ollama or has_fallback):
+              raise SystemExit("No AI provider configured. Add Ollama Cloud or a fallback secret.")
+          PY
+
+      - name: Generate one script only (no TTS, render, Drive, or YouTube)
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          TOPIC: ${{ inputs.topic }}
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          python main.py --channel "$CHANNEL" --topic "$TOPIC" --profile "$PROFILE" --script-only
+
+      - name: Upload generated script as test artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: script-only-test-${{ inputs.channel }}-${{ github.run_number }}
+          path: data/${{ inputs.channel }}/scripts/
+          if-no-files-found: warn
+          retention-days: 7

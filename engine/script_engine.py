@@ -652,48 +652,66 @@ def _call_groq(system_prompt: str, user_message: str, profile: str) -> dict:
 
 # ─── NVIDIA NIM ───────────────────────────────────────────────────────────────
 def _call_nvidia(system_prompt: str, user_message: str, profile: str) -> dict:
-    """Generate script melalui NVIDIA NIM OpenAI-compatible SDK."""
+    """
+    Generate script via the SAME NVIDIA NIM streaming request proven by
+    .github/workflows/test-nvidia-api.yml. Keep script JSON prompt/parser intact.
+    """
     from openai import OpenAI
 
     api_key = require_env("NVIDIA_API_KEY")
+    # Match the successful test workflow exactly; blank GitHub Secrets must not
+    # override the working NVIDIA endpoint/model defaults.
     base_url = (os.getenv("NVIDIA_BASE_URL", "").strip() or "https://integrate.api.nvidia.com/v1").rstrip("/")
     model = os.getenv("NVIDIA_MODEL", "").strip() or "nvidia/nemotron-3.5-super-vl-120b-a12b"
-    max_tokens = SCRIPT_MAX_TOKENS_LONGFORM if profile == "long_form" else SCRIPT_MAX_TOKENS_SHORTS
 
-    client = OpenAI(base_url=base_url, api_key=api_key, timeout=300.0)
-    response = client.chat.completions.create(
+    client = OpenAI(
+        base_url=base_url,
+        api_key=api_key,
+        timeout=180.0,
+        max_retries=1,
+    )
+    stream = client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": system_prompt + "\n\nReturn only a valid JSON object."},
-            {"role": "user", "content": user_message + _get_length_hint(profile)},
+            {
+                "role": "system",
+                "content": system_prompt + "\\n\\nReturn ONLY one valid JSON object. Do not use Markdown fences.",
+            },
+            {
+                "role": "user",
+                "content": user_message + _get_length_hint(profile),
+            },
         ],
-        temperature=0.7,
-        max_tokens=max_tokens,
-        stream=False,
+        temperature=1.0,
+        top_p=0.95,
+        max_tokens=16384,
+        extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+        stream=True,
     )
 
-    if not response.choices:
-        raise RuntimeError("NVIDIA NIM mengembalikan choices kosong")
-    message = response.choices[0].message
-    raw = message.content
-    if isinstance(raw, list):
-        raw = "".join(
-            part.get("text", "") if isinstance(part, dict) else getattr(part, "text", "")
-            for part in raw
-        )
-    if not isinstance(raw, str) or not raw.strip():
-        # Beberapa model reasoning mengirim teks pada reasoning_content.
-        reasoning = getattr(message, "reasoning_content", None)
-        if isinstance(reasoning, str) and reasoning.strip():
-            raw = reasoning
-        else:
-            finish = getattr(response.choices[0], "finish_reason", None)
-            raise RuntimeError(
-                f"NVIDIA NIM tidak mengirim message.content (finish_reason={finish}); "
-                "periksa kecocokan model dan endpoint NIM"
-            )
+    # Match the successful test: collect streamed delta.content chunks.
+    parts = []
+    finish_reason = None
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        choice = chunk.choices[0]
+        if choice.finish_reason:
+            finish_reason = choice.finish_reason
+        content = getattr(choice.delta, "content", None)
+        if isinstance(content, str):
+            parts.append(content)
 
-    result = _parse_json_response(raw.strip(), profile)
+    raw = "".join(parts).strip()
+    if finish_reason == "length":
+        raise RuntimeError("NVIDIA NIM response terpotong (finish_reason=length).")
+    if not raw:
+        raise RuntimeError(
+            f"NVIDIA NIM tidak mengirim delta.content (finish_reason={finish_reason}); "
+            "periksa model/endpoint atau lanjutkan ke provider fallback."
+        )
+
+    result = _parse_json_response(raw, profile)
     result["generator_model"] = model
     return result
 

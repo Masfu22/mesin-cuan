@@ -6,6 +6,9 @@ on:
     paths:
       - ".github/workflows/test-ai-video-pipeline.yml"
       - "engine/ai_engine.py"
+      - "engine/script_engine.py"
+      - "engine/research_engine.py"
+      - ".github/workflows/test-ollama-connection.yml"
       - "tests/test_ai_provider_fallback.py"
       - "requirements.txt"
 

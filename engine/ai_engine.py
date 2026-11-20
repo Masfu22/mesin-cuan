@@ -312,7 +312,7 @@ def _nvidia_vision(api_key: str, model: str, prompt: str, images_b64: list) -> s
 
 # ─── Provider waterfall: NVIDIA → Gemini → Ollama ─────────────────────────────
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
 
 def _run_ai_fallback(task_name: str, providers: list) -> str:

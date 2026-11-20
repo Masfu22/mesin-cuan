@@ -230,7 +230,7 @@ def _analyze_frame_batch(frames: list, mode: str, min_clips: int,
         "video vision",
         [
             ("NVIDIA", lambda: _nvidia_vision(nvidia_key, NVIDIA_VISION_MODEL, prompt, images_b64)) if nvidia_key else None,
-            ("Gemini", lambda: _gemini_vision(prompt, images_b64)) if os.getenv("GEMINI_API_KEY", "").strip() else None,
+            ("Gemini", lambda: _gemini_vision(prompt, images_b64)) if _gemini_api_keys() else None,
             ("Ollama", lambda: _ollama_vision(OLLAMA_VISION_MODEL, prompt, images_b64)),
         ],
     )
@@ -312,7 +312,7 @@ def _nvidia_vision(api_key: str, model: str, prompt: str, images_b64: list) -> s
 
 # ─── Provider waterfall: NVIDIA → Gemini → Ollama ─────────────────────────────
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
 
 def _run_ai_fallback(task_name: str, providers: list) -> str:
@@ -353,7 +353,7 @@ def _gemini_api_keys() -> list:
 
 
 def _gemini_generate_content(contents):
-    """Try configured Gemini keys in order, supporting free-tier key rotation."""
+    """Try configured Gemini keys; retry temporary server errors without quota evasion."""
     try:
         from google import genai
     except ImportError as exc:
@@ -364,20 +364,28 @@ def _gemini_generate_content(contents):
         raise RuntimeError("Tidak ada GEMINI_API_KEY yang dikonfigurasi")
     errors = []
     for index, api_key in enumerate(keys, start=1):
-        try:
-            client = genai.Client(api_key=api_key)
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=contents,
-            )
-            text = (getattr(response, "text", None) or "").strip()
-            if text:
-                logger.info(f"[ai] Gemini key slot {index} berhasil")
-                return text
-            raise RuntimeError("respons kosong")
-        except Exception as exc:
-            errors.append(f"key slot {index}: {type(exc).__name__}")
-            logger.warning(f"[ai] Gemini key slot {index} gagal ({type(exc).__name__}); mencoba key berikutnya")
+        client = genai.Client(api_key=api_key)
+        for attempt in range(1, 4):
+            try:
+                response = client.models.generate_content(model=GEMINI_MODEL, contents=contents)
+                text = (getattr(response, "text", None) or "").strip()
+                if text:
+                    logger.info(f"[ai] Gemini key slot {index} berhasil")
+                    return text
+                raise RuntimeError("respons kosong")
+            except Exception as exc:
+                detail = str(exc).lower()
+                if "429" in detail or "quota" in detail or "resource_exhausted" in detail:
+                    raise RuntimeError("Gemini rate limit/kuota tercapai; hentikan percobaan key agar tidak melewati batas provider.") from exc
+                temporary = any(token in detail for token in ("503", "500", "unavailable", "internal server error"))
+                errors.append(f"key slot {index}, attempt {attempt}: {type(exc).__name__}")
+                if temporary and attempt < 3:
+                    wait = 5 * attempt
+                    logger.warning(f"[ai] Gemini sementara tidak tersedia; retry {attempt + 1}/3 dalam {wait}s")
+                    time.sleep(wait)
+                    continue
+                logger.warning(f"[ai] Gemini key slot {index} gagal ({type(exc).__name__}); lanjut sesuai fallback")
+                break
     raise RuntimeError("Semua Gemini API key gagal: " + "; ".join(errors))
 
 

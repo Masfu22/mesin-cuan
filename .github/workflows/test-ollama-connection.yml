@@ -2,6 +2,9 @@ name: Test Ollama AI connection
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - fix/ollama-cloud-api-integration
 
 permissions:
   contents: read
@@ -21,12 +24,14 @@ jobs:
           import os
           from urllib.parse import urlparse
 
-          base = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/")
+          base = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/") or "https://ollama.com"
           key = os.getenv("OLLAMA_API_KEY", "").strip()
-          model = os.getenv("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
+          model = os.getenv("OLLAMA_MODEL", "").strip() or "glm-5.3-flash:cloud"
+          if model.endswith("-cloud"):
+              model = model[:-6]
+          elif model.endswith(":cloud"):
+              model = model[:-6]
 
-          if not base:
-              raise SystemExit("FAIL: OLLAMA_BASE_URL belum diisi di GitHub Secrets.")
           if not key:
               raise SystemExit("FAIL: OLLAMA_API_KEY belum diisi di GitHub Secrets.")
           parsed = urlparse(base)
@@ -48,12 +53,15 @@ jobs:
           python - <<'PY'
           import json
           import os
+          import sys
           import urllib.error
           import urllib.request
 
-          base = os.environ["OLLAMA_BASE_URL"].strip().rstrip("/")
+          base = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/") or "https://ollama.com"
           key = os.environ["OLLAMA_API_KEY"].strip()
-          model = os.getenv("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
+          model = os.getenv("OLLAMA_MODEL", "").strip() or "glm-5.3-flash:cloud"
+          if model.endswith("-cloud"):
+              model = model[:-6]
           payload = {
               "model": model,
               "messages": [
@@ -77,6 +85,11 @@ jobs:
               with urllib.request.urlopen(request, timeout=300) as response:
                   body = json.loads(response.read().decode("utf-8"))
           except urllib.error.HTTPError as exc:
+              # HTTP 402 means the key reached Ollama, but the account has no usage credits.
+              if exc.code == 402:
+                  print("::warning:: Ollama Cloud accepted the request but this account has no usage credits. Add credits or leave Ollama as an optional provider; the app will fall back automatically.")
+                  print("BLOCKED: No model generation was possible because Ollama billing is not enabled.")
+                  sys.exit(1)
               # Do not print request headers or API key.
               detail = exc.read().decode("utf-8", errors="replace")[:500]
               raise SystemExit(f"FAIL: Ollama HTTP {exc.code}: {detail}")

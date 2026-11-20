@@ -6,6 +6,9 @@ on:
     paths:
       - ".github/workflows/test-ai-video-pipeline.yml"
       - "engine/ai_engine.py"
+      - "engine/script_engine.py"
+      - "engine/research_engine.py"
+      - ".github/workflows/test-ollama-connection.yml"
       - "tests/test_ai_provider_fallback.py"
       - "requirements.txt"
 
@@ -25,6 +28,8 @@ jobs:
           python-version: "3.11"
       - name: Install minimal dependencies
         run: python -m pip install --disable-pip-version-check requests python-dotenv openai google-genai
+      - name: Compile all engine modules
+        run: python -m compileall -q engine
       - name: Test provider waterfall and Ollama HTTP contract
         run: python -m unittest discover -s tests -p "test_ai_provider_fallback.py" -v
 
@@ -53,6 +58,12 @@ jobs:
           GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
           GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
           GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
+          GEMINI_API_KEY_6: ${{ secrets.GEMINI_API_KEY_6 }}
+          GEMINI_API_KEY_7: ${{ secrets.GEMINI_API_KEY_7 }}
+          GEMINI_API_KEY_8: ${{ secrets.GEMINI_API_KEY_8 }}
+          GEMINI_API_KEY_9: ${{ secrets.GEMINI_API_KEY_9 }}
+          GEMINI_API_KEY_10: ${{ secrets.GEMINI_API_KEY_10 }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
         run: |
           set -euo pipefail
           if [ -z "${NVIDIA_API_KEY:-}" ]; then
@@ -111,18 +122,26 @@ jobs:
           GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
           GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
           GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
-          GEMINI_MODEL: gemini-2.5-flash
+          GEMINI_API_KEY_6: ${{ secrets.GEMINI_API_KEY_6 }}
+          GEMINI_API_KEY_7: ${{ secrets.GEMINI_API_KEY_7 }}
+          GEMINI_API_KEY_8: ${{ secrets.GEMINI_API_KEY_8 }}
+          GEMINI_API_KEY_9: ${{ secrets.GEMINI_API_KEY_9 }}
+          GEMINI_API_KEY_10: ${{ secrets.GEMINI_API_KEY_10 }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+          GEMINI_MODEL: gemini-3.8-flash
         run: |
           python - <<'PY'
           import io
           import os
           import sys
+          import time
           from PIL import Image, ImageDraw
 
           keys = [
               os.environ.get(name, "").strip()
-              for name in ("GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4", "GEMINI_API_KEY_5")
+              for name in ("GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4", "GEMINI_API_KEY_5", "GEMINI_API_KEY_6", "GEMINI_API_KEY_7", "GEMINI_API_KEY_8", "GEMINI_API_KEY_9", "GEMINI_API_KEY_10")
           ]
+          keys.extend(value.strip() for value in os.environ.get("GEMINI_API_KEYS", "").split(",") if value.strip())
           keys = list(dict.fromkeys(key for key in keys if key))
           if not keys:
               print("SKIP: no Gemini API key secrets configured; fallback routing is covered by unit tests.")
@@ -139,26 +158,48 @@ jobs:
           response = None
           errors = []
           for index, key in enumerate(keys, start=1):
-              try:
-                  client = genai.Client(api_key=key)
-                  candidate = client.models.generate_content(
-                      model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
-                      contents=[
-                          "Read the exact text in this image. Reply with the words only.",
-                          types.Part.from_bytes(data=buf.getvalue(), mime_type="image/png"),
-                      ],
-                  )
-                  answer = (getattr(candidate, "text", None) or "").strip().upper()
-                  if "GEMINI VISION CHECK" in " ".join(answer.split()):
-                      response = candidate
-                      print("Gemini key slot", index, "passed.")
+              for attempt in range(1, 4):
+                  try:
+                      client = genai.Client(api_key=key)
+                      text_check = client.models.generate_content(
+                          model=os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
+                          contents="Reply with exactly: GEMINI TEXT CHECK",
+                      )
+                      text_answer = (getattr(text_check, "text", None) or "").strip().upper()
+                      if "GEMINI TEXT CHECK" not in " ".join(text_answer.split()):
+                          raise RuntimeError("Gemini text response did not match the expected check")
+                      print("Gemini text key slot", index, "passed.")
+
+                      candidate = client.models.generate_content(
+                          model=os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
+                          contents=[
+                              "Read the exact text in this image. Reply with the words only.",
+                              types.Part.from_bytes(data=buf.getvalue(), mime_type="image/png"),
+                          ],
+                      )
+                      answer = (getattr(candidate, "text", None) or "").strip().upper()
+                      if "GEMINI VISION CHECK" in " ".join(answer.split()):
+                          response = candidate
+                          print("Gemini vision key slot", index, "passed.")
+                          break
+                      errors.append(f"key slot {index}: image text not recognized")
                       break
-                  errors.append(f"key slot {index}: image text not recognized")
-              except Exception as exc:
-                  errors.append(f"key slot {index}: {type(exc).__name__}")
+                  except Exception as exc:
+                      detail = str(exc).replace(key, "[REDACTED]")
+                      lowered = detail.lower()
+                      if "429" in lowered or "quota" in lowered or "resource_exhausted" in lowered:
+                          raise SystemExit("Gemini quota/rate limit reached; no key rotation attempted.")
+                      temporary = any(token in lowered for token in ("503", "500", "unavailable", "internal server error"))
+                      if temporary and attempt < 3:
+                          time.sleep(5 * attempt)
+                          continue
+                      errors.append(f"key slot {index}: {type(exc).__name__}: {detail[:240]}")
+                      break
+              if response is not None:
+                  break
           if response is None:
               raise SystemExit("FAIL: no configured Gemini key passed: " + "; ".join(errors))
           print("PASS: Gemini API authentication and multimodal text+image request succeeded.")
-          print("Model:", os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"))
+          print("Model:", os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"))
           print("Response content withheld from logs.")
           PY

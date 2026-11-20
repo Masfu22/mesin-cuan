@@ -15,14 +15,19 @@ import os
 import json
 import requests
 
-from engine.utils import get_logger, get_ollama_model
+from engine.utils import get_logger
 
 logger = get_logger("research_engine")
 
 PERPLEXITY_API_BASE = "https://api.perplexity.ai"
 PERPLEXITY_MODEL = os.environ.get("PERPLEXITY_MODEL", "perplexity/sonar")
 
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "").strip().rstrip("/") or "https://ollama.com"
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "").strip() or "glm-5.3-flash:cloud"
+if OLLAMA_MODEL.endswith("-cloud"):
+    OLLAMA_MODEL = OLLAMA_MODEL[:-6]
+elif OLLAMA_MODEL.endswith(":cloud"):
+    OLLAMA_MODEL = OLLAMA_MODEL[:-6]
 
 RESEARCH_TIMEOUT = 30  # detik — cepat, jangan block pipeline terlalu lama
 MAX_CONTEXT_CHARS = 1800  # Batasi panjang context agar tidak membanjiri prompt
@@ -188,13 +193,13 @@ def _try_ollama_native_search(query: str, language: str) -> dict:
         )
         
         payload = {
-            "model": get_ollama_model(),
+            "model": OLLAMA_MODEL,
             "messages": [{"role": "user", "content": summary_prompt}],
             "stream": False,
             "options": {"temperature": 0.8}
             # num_predict dihapus agar max tokens limit tidak dibatasi
         }
-        resp2 = requests.post(f"{OLLAMA_BASE_URL}/chat/completions", headers={"Authorization": f'Bearer {os.environ.get("OLLAMA_API_KEY")}'} if os.environ.get("OLLAMA_API_KEY") else {}, json=payload, timeout=RESEARCH_TIMEOUT)
+        resp2 = requests.post(f"{OLLAMA_BASE_URL}/api/chat", headers={"Authorization": f'Bearer {os.environ.get("OLLAMA_API_KEY")}'} if os.environ.get("OLLAMA_API_KEY") else {}, json=payload, timeout=RESEARCH_TIMEOUT)
         resp2.raise_for_status()
         
         content = resp2.json().get("message", {}).get("content", "").strip()
@@ -215,9 +220,11 @@ def _try_ollama_native_search(query: str, language: str) -> dict:
 
 def _try_ollama_web_search(query: str, language: str) -> dict:
     """
-    Coba panggil Ollama dengan tool web_search via DuckDuckGo.
-    Jika model tidak support tools -> gagal graceful.
+    Coba panggil Ollama Cloud dengan tool web_search via DuckDuckGo.
+    Jika API key tidak tersedia atau model tidak support tools -> skip graceful.
     """
+    if not os.environ.get("OLLAMA_API_KEY", "").strip():
+        return {"context": "", "sources": [], "used": False, "provider": "none"}
     try:
         messages = [
             {
@@ -234,7 +241,7 @@ def _try_ollama_web_search(query: str, language: str) -> dict:
         ]
         
         payload = {
-            "model": get_ollama_model(),
+            "model": OLLAMA_MODEL,
             "messages": messages,
             "tools": [
                 {
@@ -262,7 +269,7 @@ def _try_ollama_web_search(query: str, language: str) -> dict:
         api_key = os.environ.get("OLLAMA_API_KEY", "")
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
-        resp = requests.post(f"{OLLAMA_BASE_URL}/chat/completions", headers=headers, json=payload, timeout=RESEARCH_TIMEOUT)
+        resp = requests.post(f"{OLLAMA_BASE_URL}/api/chat", headers=headers, json=payload, timeout=RESEARCH_TIMEOUT)
         resp.raise_for_status()
 
         data = resp.json()
@@ -293,7 +300,7 @@ def _try_ollama_web_search(query: str, language: str) -> dict:
                 payload["messages"] = messages
                 payload.pop("tools", None)  # Hapus tools argumen krn kita mau final text
                 
-                resp2 = requests.post(f"{OLLAMA_BASE_URL}/chat/completions", headers=headers, json=payload, timeout=RESEARCH_TIMEOUT)
+                resp2 = requests.post(f"{OLLAMA_BASE_URL}/api/chat", headers=headers, json=payload, timeout=RESEARCH_TIMEOUT)
                 resp2.raise_for_status()
                 
                 content = resp2.json().get("message", {}).get("content", "").strip()

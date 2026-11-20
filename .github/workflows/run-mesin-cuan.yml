@@ -33,7 +33,7 @@ on:
         description: Uji render tanpa mengunggah ke Google Drive
         required: true
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
@@ -85,7 +85,20 @@ jobs:
           PROVIDER_B_API_KEY: ${{ secrets.PROVIDER_B_API_KEY }}
           PROVIDER_B_BASE_URL: ${{ secrets.PROVIDER_B_BASE_URL }}
           PROVIDER_B_MODEL: ${{ secrets.PROVIDER_B_MODEL }}
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+          OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
+          OLLAMA_MODEL: ${{ secrets.OLLAMA_MODEL }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+          GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
+          GEMINI_API_KEY_6: ${{ secrets.GEMINI_API_KEY_6 }}
+          GEMINI_API_KEY_7: ${{ secrets.GEMINI_API_KEY_7 }}
+          GEMINI_API_KEY_8: ${{ secrets.GEMINI_API_KEY_8 }}
+          GEMINI_API_KEY_9: ${{ secrets.GEMINI_API_KEY_9 }}
+          GEMINI_API_KEY_10: ${{ secrets.GEMINI_API_KEY_10 }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
@@ -141,7 +154,9 @@ jobs:
           env_keys = [
               "YOUTUBE_API_KEY", "PROVIDER_A_API_KEY", "PROVIDER_A_BASE_URL",
               "PROVIDER_A_MODEL", "PROVIDER_B_API_KEY", "PROVIDER_B_BASE_URL",
-              "PROVIDER_B_MODEL", "GEMINI_API_KEY", "GROQ_API_KEY",
+              "PROVIDER_B_MODEL", "OLLAMA_API_KEY", "OLLAMA_BASE_URL", "OLLAMA_MODEL", "GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4",
+              "GEMINI_API_KEY_5", "GEMINI_API_KEY_6", "GEMINI_API_KEY_7", "GEMINI_API_KEY_8",
+              "GEMINI_API_KEY_9", "GEMINI_API_KEY_10", "GEMINI_API_KEYS", "GROQ_API_KEY",
               "ANTHROPIC_API_KEY", "NVIDIA_API_KEY", "PERPLEXITY_API_KEY",
               "PEXELS_API_KEY", "PIXABAY_API_KEY", "COVERR_API_KEY",
               "COVERR_APP_ID", "FREESOUND_API_KEY", "ELEVENLABS_API_KEY",
@@ -174,11 +189,19 @@ jobs:
                               "GOOGLE_CLIENT_SECRET", "GOOGLE_DRIVE_FOLDER_ID"]
           ai_keys = ["PROVIDER_A_API_KEY", "PROVIDER_A_BASE_URL", "PROVIDER_A_MODEL",
                      "PROVIDER_B_API_KEY", "PROVIDER_B_BASE_URL", "PROVIDER_B_MODEL",
-                     "GEMINI_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY", "NVIDIA_API_KEY"]
+                     "OLLAMA_API_KEY", "OLLAMA_BASE_URL", "OLLAMA_MODEL",
+                     "GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4",
+                     "GEMINI_API_KEY_5", "GEMINI_API_KEY_6", "GEMINI_API_KEY_7", "GEMINI_API_KEY_8",
+                     "GEMINI_API_KEY_9", "GEMINI_API_KEY_10", "GEMINI_API_KEYS",
+                     "GROQ_API_KEY", "ANTHROPIC_API_KEY", "NVIDIA_API_KEY"]
           ai_ready = bool(
               (os.environ.get("PROVIDER_A_API_KEY") and os.environ.get("PROVIDER_A_BASE_URL"))
               or (os.environ.get("PROVIDER_B_API_KEY") and os.environ.get("PROVIDER_B_BASE_URL"))
-              or os.environ.get("GROQ_API_KEY") or os.environ.get("GEMINI_API_KEY")
+              or os.environ.get("OLLAMA_API_KEY") or os.environ.get("GROQ_API_KEY")
+              or any(os.environ.get(name, "").strip() for name in (
+                  "GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4",
+                  "GEMINI_API_KEY_5", "GEMINI_API_KEY_6", "GEMINI_API_KEY_7", "GEMINI_API_KEY_8",
+                  "GEMINI_API_KEY_9", "GEMINI_API_KEY_10", "GEMINI_API_KEYS"))
               or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("NVIDIA_API_KEY")
           )
           lines = ["## Pemeriksaan konfigurasi Mesin Cuan — " + channel, "",
@@ -196,7 +219,7 @@ jobs:
           if missing_optional:
               print("INFO: Secret opsional belum diisi: " + ", ".join(missing_optional))
           if not ai_ready:
-              raise SystemExit("Tidak ada AI provider aktif. Isi minimal Provider A/B (API_KEY + BASE_URL), GROQ_API_KEY, GEMINI_API_KEY, atau ANTHROPIC_API_KEY.")
+              raise SystemExit("Tidak ada AI provider aktif. Isi OLLAMA_API_KEY, Provider A/B, GROQ_API_KEY, GEMINI_API_KEY, atau ANTHROPIC_API_KEY.")
           print(f"Environment disiapkan untuk {channel}; nilai rahasia tidak ditampilkan.")
           PY
 

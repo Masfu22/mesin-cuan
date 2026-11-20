@@ -1,12 +1,12 @@
 """
 script_engine.py - Generate script narasi video dari topik
 
-Primary  : Dual Parallel Generation (Provider-A + Provider-B) dengan Cross-Provider Scoring
+Primary  : Ollama Cloud (jika dikonfigurasi), selain itu Dual Parallel Provider-A/B
            Generator A: Provider-A → Scored by: Provider-B
            Generator B: Provider-B → Scored by: Provider-A
            Winner (score tertinggi) yang lanjut ke TTS.
 Fallback : Sequential waterfall jika parallel gagal/score < threshold
-           Groq → Gemini → Anthropic (Groq TIDAK pernah jadi primary)
+           Ollama Cloud → Groq → Gemini → Anthropic → NVIDIA NIM
 Support  : profile "shorts" dan "long_form" (Target 1300+ kata)
 
 Pengaman JSON & Karakter:
@@ -156,10 +156,11 @@ def generate(topic_data: dict, channel: dict, profile: str = "shorts") -> dict:
         user_message = f"{prefix}: {topic}{part_instruction}"
 
 
-    # ── Dual Parallel Generation + Cross-Provider Scoring ──────────────────
+    # Pertahankan arsitektur asli upstream: Provider-A + Provider-B
+    # generate paralel dan saling cross-score. Ollama Cloud hanya provider
+    # cadangan di waterfall jika generator utama dan Groq gagal.
     result = _generate_and_pick_best(system_prompt, user_message, profile, ch_id, channel=channel)
     if result is None:
-        # Fallback: sequential waterfall (existing behavior, tidak ada perubahan)
         logger.info(f"[{ch_id}] Parallel scorer tidak menghasilkan winner → fallback ke sequential")
         result = _call_ai(system_prompt, user_message, profile=profile)
     result["topic"]              = topic
@@ -215,17 +216,19 @@ def _call_ai(system_prompt: str, user_message: str, profile: str = "shorts") -> 
     if cfg_b["base_url"] and cfg_b["api_key"]:
         primary_providers.append(("Provider-B", lambda: _call_provider_b(system_prompt, user_message, profile)))
 
-    # Fallback berurutan: NVIDIA NIM, Gemini, Anthropic, lalu Groq.
-    # Provider tanpa API key dilewati otomatis.
+    # Pertahankan urutan fallback upstream yang telah digunakan:
+    # Groq → Gemini → Anthropic. Provider tambahan ditempatkan setelahnya.
     fallback_providers = []
-    if os.getenv("NVIDIA_API_KEY", "").strip():
-        fallback_providers.append(("NVIDIA NIM", lambda: _call_nvidia(system_prompt, user_message, profile)))
-    if os.getenv("GEMINI_API_KEY", "").strip():
+    if os.getenv("GROQ_API_KEY", "").strip():
+        fallback_providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
+    if _gemini_api_keys():
         fallback_providers.append(("Gemini", lambda: _call_gemini(system_prompt, user_message, profile)))
     if os.getenv("ANTHROPIC_API_KEY", "").strip():
         fallback_providers.append(("Anthropic", lambda: _call_anthropic(system_prompt, user_message, profile)))
-    if os.getenv("GROQ_API_KEY", "").strip():
-        fallback_providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
+    if os.getenv("NVIDIA_API_KEY", "").strip():
+        fallback_providers.append(("NVIDIA NIM", lambda: _call_nvidia(system_prompt, user_message, profile)))
+    if os.getenv("OLLAMA_API_KEY", "").strip():
+        fallback_providers.append(("Ollama Cloud", lambda: _call_ollama_cloud(system_prompt, user_message, profile)))
     providers = primary_providers + fallback_providers
     if not providers:
         raise RuntimeError("Tidak ada AI provider aktif. Isi minimal satu API key atau konfigurasi Provider-A/B.")
@@ -396,6 +399,78 @@ def _generate_and_pick_best(
     # Fallback ke sequential jika sama sekali tidak ada hasil
     logger.warning(f"[{ch_id}] Semua parallel attempt gagal total — fallback ke sequential")
     return None
+
+
+# ─── Ollama Cloud ──────────────────────────────────────────────────────────────
+
+def _call_ollama_cloud(system_prompt: str, user_message: str, profile: str) -> dict:
+    """Generate script using Ollama's hosted Cloud API, never localhost."""
+    api_key = os.getenv("OLLAMA_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("OLLAMA_API_KEY belum tersedia di GitHub Secrets.")
+    base_url = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/") or "https://ollama.com"
+    if base_url != "https://ollama.com":
+        raise RuntimeError("OLLAMA_BASE_URL harus tepat https://ollama.com (tanpa /api).")
+    model = os.getenv("OLLAMA_MODEL", "").strip() or "glm-5.3-flash:cloud"
+    if model.endswith("-cloud"):
+        model = model[:-6]
+    elif model.endswith(":cloud"):
+        model = model[:-6]
+    if not model:
+        raise RuntimeError("OLLAMA_MODEL kosong.")
+    max_tokens = SCRIPT_MAX_TOKENS_LONGFORM if profile == "long_form" else SCRIPT_MAX_TOKENS_SHORTS
+    system_with_json = system_prompt + (
+        "\n\nCRITICAL: Respond with ONLY a raw JSON object. No markdown, code fences, or explanation."
+    )
+    last_error = None
+    for attempt in range(1, MAX_JSON_RETRY + 1):
+        user_msg = user_message + _get_length_hint(profile)
+        if attempt > 1:
+            user_msg += f"\n\n[ATTEMPT {attempt}] Output ONLY valid JSON."
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_with_json},
+                {"role": "user", "content": user_msg},
+            ],
+            "stream": False,
+            "format": "json",
+            "options": {"temperature": max(0.7, 1.0 - (attempt - 1) * 0.1), "num_predict": max_tokens},
+        }
+        try:
+            response = _post_json_no_proxy(
+                f"{base_url}/api/chat",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                payload=payload,
+                timeout=600,
+            )
+            response.raise_for_status()
+            raw = response.json().get("message", {}).get("content", "").strip()
+            if not raw:
+                raise ValueError("Ollama Cloud mengembalikan respons kosong.")
+            result = _parse_json_response(raw, profile)
+            result["generator_model"] = model
+            result["generator_provider"] = "ollama_cloud"
+            return result
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            detail = ""
+            if exc.response is not None:
+                try:
+                    detail = str(exc.response.json().get("error", ""))[:250]
+                except Exception:
+                    detail = exc.response.text[:250]
+            last_error = RuntimeError(f"Ollama Cloud HTTP {status}: {detail or 'request ditolak'}")
+            logger.warning(f"Ollama Cloud HTTP {status}, attempt {attempt}: {detail or 'request ditolak'}")
+            if status in (401, 402, 403, 404):
+                break
+        except (requests.exceptions.Timeout, requests.exceptions.RequestException) as exc:
+            last_error = RuntimeError(f"Ollama Cloud koneksi gagal: {type(exc).__name__}")
+            logger.warning(f"Ollama Cloud koneksi gagal, attempt {attempt}: {type(exc).__name__}")
+        except (json.JSONDecodeError, ValueError) as exc:
+            last_error = exc
+            logger.warning(f"Ollama Cloud JSON gagal, attempt {attempt}/{MAX_JSON_RETRY}: {exc}")
+    raise RuntimeError(f"Ollama Cloud gagal: {last_error or 'tidak ada respons valid'}")
 
 
 # ─── DeepSeek via Ollama ──────────────────────────────────────────────────────
@@ -679,42 +754,75 @@ def _call_nvidia(system_prompt: str, user_message: str, profile: str) -> dict:
 
 # ─── Gemini ───────────────────────────────────────────────────────────────────
 
+def _gemini_api_keys() -> list:
+    """Load Gemini keys from individual GitHub Secrets and an optional CSV secret."""
+    names = ("GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3",
+             "GEMINI_API_KEY_4", "GEMINI_API_KEY_5", "GEMINI_API_KEY_6",
+             "GEMINI_API_KEY_7", "GEMINI_API_KEY_8", "GEMINI_API_KEY_9",
+             "GEMINI_API_KEY_10")
+    keys = []
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value and value not in keys:
+            keys.append(value)
+    for value in os.getenv("GEMINI_API_KEYS", "").split(","):
+        value = value.strip()
+        if value and value not in keys:
+            keys.append(value)
+    return keys
+
+
 def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
-    from google import genai
-    client = genai.Client(api_key=require_env("GEMINI_API_KEY"))
+    """Generate a script with Gemini; rotate invalid keys and retry temporary server errors."""
+    try:
+        from google import genai
+    except ImportError as exc:
+        raise RuntimeError("google-genai belum terpasang; tambahkan google-genai ke requirements.txt") from exc
 
-    for attempt in range(1, MAX_JSON_RETRY + 1):
-        user_msg = user_message + _get_length_hint(profile)
-        if attempt > 1:
-            user_msg += f"\n\n[ATTEMPT {attempt}] Output ONLY valid JSON, no markdown."
+    keys = _gemini_api_keys()
+    if not keys:
+        raise RuntimeError("Tidak ada GEMINI_API_KEY yang dikonfigurasi")
 
-        prompt = f"{system_prompt}\n\n{user_msg}"
+    model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
+    errors = []
+    for key_index, api_key in enumerate(keys, start=1):
+        client = genai.Client(api_key=api_key)
+        for attempt in range(1, MAX_JSON_RETRY + 1):
+            user_msg = user_message + _get_length_hint(profile)
+            if attempt > 1:
+                user_msg += f"\n\n[ATTEMPT {attempt}] Output ONLY valid JSON, no markdown."
+            prompt = f"{system_prompt}\n\n{user_msg}"
+            try:
+                resp = client.models.generate_content(model=model, contents=prompt)
+                raw = (getattr(resp, "text", None) or "").strip()
+                if not raw:
+                    raise ValueError("Gemini returned empty response")
+                result = _parse_json_response(raw, profile)
+                result["generator_model"] = model
+                result["generator_provider"] = "gemini"
+                logger.info(f"Gemini key slot {key_index} berhasil")
+                return result
+            except (json.JSONDecodeError, ValueError) as exc:
+                errors.append(f"key slot {key_index}, attempt {attempt}: {type(exc).__name__}")
+                logger.warning(f"Gemini key slot {key_index} JSON gagal pada percobaan {attempt}")
+                if attempt < MAX_JSON_RETRY:
+                    continue
+                break
+            except Exception as exc:
+                detail = str(exc).lower()
+                if "429" in detail or "quota" in detail or "resource_exhausted" in detail:
+                    raise RuntimeError("Gemini rate limit/kuota tercapai; lanjutkan ke provider fallback tanpa memutar key.") from exc
+                temporary = any(token in detail for token in ("503", "500", "unavailable", "internal server error"))
+                errors.append(f"key slot {key_index}, attempt {attempt}: {type(exc).__name__}")
+                if temporary and attempt < MAX_JSON_RETRY:
+                    wait = 5 * attempt
+                    logger.warning(f"Gemini sementara tidak tersedia; retry {attempt + 1}/{MAX_JSON_RETRY} dalam {wait}s")
+                    time.sleep(wait)
+                    continue
+                logger.warning(f"Gemini key slot {key_index} gagal ({type(exc).__name__}); mencoba key berikutnya")
+                break
 
-        try:
-            resp = client.models.generate_content(
-                model="gemini-1.5-flash",
-                contents=prompt,
-            )
-            if not resp.text:
-                raise ValueError("Gemini returned empty response")
-
-            return _parse_json_response(resp.text.strip(), profile)
-
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Gemini attempt {attempt}/{MAX_JSON_RETRY}: JSON parse gagal — {e}")
-            if attempt == MAX_JSON_RETRY:
-                raise
-
-        except Exception as e:
-            err_str = str(e)
-            if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
-                wait = 60 if attempt == 1 else 120
-                logger.warning(f"Gemini rate limit, tunggu {wait}s...")
-                time.sleep(wait)
-            else:
-                raise
-
-    raise RuntimeError("Gemini gagal setelah semua retry")
+    raise RuntimeError("Semua Gemini API key gagal: " + "; ".join(errors))
 
 
 # ─── Anthropic ────────────────────────────────────────────────────────────────

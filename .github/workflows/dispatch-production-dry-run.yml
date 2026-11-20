@@ -14,16 +14,30 @@ permissions:
   contents: read
   actions: write
 
+concurrency:
+  group: mesin-cuan-dry-run-dispatch
+  cancel-in-progress: true
+
 jobs:
   dispatch-dry-run:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
-      - name: Dispatch production pipeline in DRY RUN mode
+      - name: Dispatch only for the latest validated main commit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: Masfu22/mesin-cuan
+          VALIDATED_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            LATEST_SHA="$(gh api "repos/$GH_REPO/commits/main" --jq .sha)"
+            if [ "$VALIDATED_SHA" != "$LATEST_SHA" ]; then
+              echo "Skip stale validation $VALIDATED_SHA; latest main is $LATEST_SHA."
+              exit 0
+            fi
+          fi
           gh workflow run .github/workflows/run-mesin-cuan.yml \
             --ref main \
             --field channel=ch_id_horror \

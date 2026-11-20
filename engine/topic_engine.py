@@ -371,9 +371,9 @@ def _generate_candidates_via_ai(niche: str, language: str, hints=None,
         gemini_deadline = time.monotonic() + 120
         for model_name in models:
             for key_index, api_key in enumerate(keys, start=1):
-                if __import__('time').monotonic() >= gemini_deadline:
+                if time.monotonic() >= gemini_deadline:
                     raise TimeoutError("Batas waktu total Gemini topic 120 detik tercapai")
-                remaining_ms = max(1000, min(45000, int((gemini_deadline - __import__('time').monotonic()) * 1000)))
+                remaining_ms = max(1000, min(45000, int((gemini_deadline - time.monotonic()) * 1000)))
                 try:
                     client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=remaining_ms))
                     response = client.models.generate_content(
@@ -391,7 +391,7 @@ def _generate_candidates_via_ai(niche: str, language: str, hints=None,
                     logger.warning(f"Gemini topic gagal pada model={model_name}, key slot {key_index}: {type(key_exc).__name__}")
         raise RuntimeError("; ".join(gemini_errors) or "Semua kombinasi Gemini gagal")
     except Exception as exc:
-        logger.warning(f"Gemini topic failed: {exc} -> trying Anthropic...")
+        logger.warning(f"Gemini topic failed: {exc} -> trying Groq...")
 
     # ── FALLBACK: Groq (setelah NVIDIA dan Gemini) ────────────────────────────────────────────────────────
     try:

@@ -89,7 +89,7 @@ jobs:
               if exc.code == 402:
                   print("::warning:: Ollama Cloud accepted the request but this account has no usage credits. Add credits or leave Ollama as an optional provider; the app will fall back automatically.")
                   print("BLOCKED: No model generation was possible because Ollama billing is not enabled.")
-                  sys.exit(0)
+                  sys.exit(1)
               # Do not print request headers or API key.
               detail = exc.read().decode("utf-8", errors="replace")[:500]
               raise SystemExit(f"FAIL: Ollama HTTP {exc.code}: {detail}")

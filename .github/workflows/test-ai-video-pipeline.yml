@@ -159,6 +159,15 @@ jobs:
           for index, key in enumerate(keys, start=1):
               try:
                   client = genai.Client(api_key=key)
+                  text_check = client.models.generate_content(
+                      model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+                      contents="Reply with exactly: GEMINI TEXT CHECK",
+                  )
+                  text_answer = (getattr(text_check, "text", None) or "").strip().upper()
+                  if "GEMINI TEXT CHECK" not in " ".join(text_answer.split()):
+                      raise RuntimeError("Gemini text response did not match the expected check")
+                  print("Gemini text key slot", index, "passed.")
+
                   candidate = client.models.generate_content(
                       model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
                       contents=[
@@ -169,11 +178,12 @@ jobs:
                   answer = (getattr(candidate, "text", None) or "").strip().upper()
                   if "GEMINI VISION CHECK" in " ".join(answer.split()):
                       response = candidate
-                      print("Gemini key slot", index, "passed.")
+                      print("Gemini vision key slot", index, "passed.")
                       break
                   errors.append(f"key slot {index}: image text not recognized")
               except Exception as exc:
-                  errors.append(f"key slot {index}: {type(exc).__name__}")
+                  detail = str(exc).replace(key, "[REDACTED]")[:240]
+                  errors.append(f"key slot {index}: {type(exc).__name__}: {detail}")
           if response is None:
               raise SystemExit("FAIL: no configured Gemini key passed: " + "; ".join(errors))
           print("PASS: Gemini API authentication and multimodal text+image request succeeded.")

@@ -756,10 +756,18 @@ def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
             if time.monotonic() >= total_deadline:
                 raise RuntimeError("Batas waktu total Gemini script 180 detik tercapai")
             remaining_ms = max(1000, min(45000, int((total_deadline - time.monotonic()) * 1000)))
-            client = genai.Client(
-                api_key=api_key,
-                http_options=types.HttpOptions(timeout=remaining_ms),
-            )
+            try:
+                client = genai.Client(
+                    api_key=api_key,
+                    http_options=types.HttpOptions(timeout=remaining_ms),
+                )
+            except Exception as exc:
+                errors.append(f"model {model}/key {key_index}: client init {type(exc).__name__}")
+                logger.warning(
+                    f"Gemini client key slot {key_index} gagal dibuat ({type(exc).__name__}); mencoba key berikutnya"
+                )
+                continue
+
             for attempt in range(1, max_attempts + 1):
                 if time.monotonic() >= total_deadline:
                     break

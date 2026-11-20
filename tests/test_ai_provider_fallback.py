@@ -73,6 +73,25 @@ class ProviderFallbackTests(unittest.TestCase):
         )
         self.assertEqual(result, "OLLAMA_TEST_OK")
 
+    def test_gemini_key_rotation_reads_multiple_slots(self):
+        names = ["GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEYS"]
+        previous = {name: __import__("os").environ.get(name) for name in names}
+        try:
+            __import__("os").environ["GEMINI_API_KEY"] = "key-one"
+            __import__("os").environ["GEMINI_API_KEY_2"] = "key-two"
+            __import__("os").environ["GEMINI_API_KEY_3"] = "key-one"
+            __import__("os").environ["GEMINI_API_KEYS"] = "key-three,key-two"
+            self.assertEqual(
+                ai_engine._gemini_api_keys(),
+                ["key-one", "key-two", "key-three"],
+            )
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    __import__("os").environ.pop(name, None)
+                else:
+                    __import__("os").environ[name] = value
+
     def test_ollama_text_http_contract(self):
         _OllamaHandler.received.clear()
         result = ai_engine._ollama_text("test-model", "hello text")

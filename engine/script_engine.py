@@ -411,10 +411,10 @@ def _call_ollama_cloud(system_prompt: str, user_message: str, profile: str) -> d
     api_key = os.getenv("OLLAMA_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("OLLAMA_API_KEY belum tersedia di GitHub Secrets.")
-    base_url = os.getenv("OLLAMA_BASE_URL", "https://ollama.com").strip().rstrip("/")
+    base_url = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/") or "https://ollama.com"
     if base_url != "https://ollama.com":
         raise RuntimeError("OLLAMA_BASE_URL harus tepat https://ollama.com (tanpa /api).")
-    model = os.getenv("OLLAMA_MODEL", "gpt-oss:20b").strip()
+    model = os.getenv("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
     if model.endswith("-cloud"):
         model = model[:-6]
     if not model:

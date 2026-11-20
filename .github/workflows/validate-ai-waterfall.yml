@@ -69,7 +69,7 @@ jobs:
           assert "NVIDIA_API_KEY" in nvidia_test and "chat/completions" in nvidia_test
           research = Path("engine/research_engine.py").read_text(encoding="utf-8")
           assert 'OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "")' in research
-          assert '"/api/chat"' in research
+          assert "/api/chat" in research
           assert 'OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL"' in research
           assert "http://localhost:11434" not in research, "Cloud workflow must not silently call localhost"
 

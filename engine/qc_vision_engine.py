@@ -17,7 +17,7 @@ Aspek yang dicek:
   - Kualitas audio (noise, volume)
   - Pacing & transisi
 
-Model: gemini-1.5-flash (fallback: gemini-2.5-flash kalau deprecated)
+Model: gemini-1.5-flash (fallback: gemini-3.5-flash-lite kalau deprecated)
 """
 
 import os
@@ -33,7 +33,7 @@ logger = get_logger("qc_vision")
 GEMINI_MODELS = [
     os.getenv("GEMINI_MODEL", "").strip(),
     "gemini-3.8-flash",
-    "gemini-2.5-flash",
+    "gemini-3.5-flash-lite",
 ]
 
 # Batas waktu tunggu video diproses Gemini (detik)

@@ -1,0 +1,33 @@
+name: Mesin Cuan - Safe Production Dry Run
+
+on:
+  workflow_run:
+    workflows:
+      - Test AI Video Pipeline and Fallbacks
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch-dry-run:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch production pipeline in DRY RUN mode
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run .github/workflows/run-mesin-cuan.yml \
+            --ref main \
+            --field channel=ch_id_horror \
+            --field topic="Uji integrasi provider dan QC - dry run" \
+            --field profile=shorts \
+            --field skip_qc=false \
+            --field dry_run=true
+          echo "Production workflow dispatched with dry_run=true and QC enabled."

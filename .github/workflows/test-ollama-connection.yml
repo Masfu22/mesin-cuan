@@ -21,12 +21,10 @@ jobs:
           import os
           from urllib.parse import urlparse
 
-          base = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/")
+          base = os.getenv("OLLAMA_BASE_URL", "https://ollama.com").strip().rstrip("/")
           key = os.getenv("OLLAMA_API_KEY", "").strip()
           model = os.getenv("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
 
-          if not base:
-              raise SystemExit("FAIL: OLLAMA_BASE_URL belum diisi di GitHub Secrets.")
           if not key:
               raise SystemExit("FAIL: OLLAMA_API_KEY belum diisi di GitHub Secrets.")
           parsed = urlparse(base)
@@ -51,7 +49,7 @@ jobs:
           import urllib.error
           import urllib.request
 
-          base = os.environ["OLLAMA_BASE_URL"].strip().rstrip("/")
+          base = os.getenv("OLLAMA_BASE_URL", "https://ollama.com").strip().rstrip("/")
           key = os.environ["OLLAMA_API_KEY"].strip()
           model = os.getenv("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
           payload = {

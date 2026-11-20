@@ -6,7 +6,7 @@ Primary  : Ollama Cloud (jika dikonfigurasi), selain itu Dual Parallel Provider-
            Generator B: Provider-B → Scored by: Provider-A
            Winner (score tertinggi) yang lanjut ke TTS.
 Fallback : Sequential waterfall jika parallel gagal/score < threshold
-           Groq → Gemini → Anthropic (Groq TIDAK pernah jadi primary)
+           Ollama Cloud → Groq → Gemini → Anthropic → NVIDIA NIM
 Support  : profile "shorts" dan "long_form" (Target 1300+ kata)
 
 Pengaman JSON & Karakter:
@@ -246,9 +246,11 @@ def _call_ai(system_prompt: str, user_message: str, profile: str = "shorts") -> 
         except Exception as e:
             last_error = e
             logger.warning(f"\u274c {name} gagal: {e}")
-            if name not in ("Provider-A", "Provider-B"):
+            if name not in ("Provider-A", "Provider-B", "Ollama Cloud"):
                 logger.info(f"Tunggu {PROVIDER_SWITCH_DELAY}s sebelum provider berikutnya...")
                 time.sleep(PROVIDER_SWITCH_DELAY)
+            elif name == "Ollama Cloud":
+                logger.info("Lewati jeda retry Ollama Cloud; lanjutkan ke provider cadangan.")
 
     raise RuntimeError(f"Semua provider gagal. Error terakhir: {last_error}")
 

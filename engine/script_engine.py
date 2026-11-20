@@ -218,7 +218,7 @@ def _call_ai(system_prompt: str, user_message: str, profile: str = "shorts") -> 
     providers = []
     if os.getenv("NVIDIA_API_KEY", "").strip():
         providers.append(("NVIDIA NIM", lambda: _call_nvidia(system_prompt, user_message, profile)))
-    if os.getenv("GEMINI_API_KEY", "").strip():
+    if _gemini_api_keys():
         providers.append(("Gemini", lambda: _call_gemini(system_prompt, user_message, profile)))
     if os.getenv("GROQ_API_KEY", "").strip():
         providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
@@ -684,42 +684,58 @@ def _call_nvidia(system_prompt: str, user_message: str, profile: str) -> dict:
 
 # ─── Gemini ───────────────────────────────────────────────────────────────────
 
+def _gemini_api_keys() -> list[str]:
+    """Ambil seluruh Gemini key tanpa pernah menulis nilainya ke log."""
+    names = ["GEMINI_API_KEY"] + [f"GEMINI_API_KEY_{i}" for i in range(2, 11)]
+    keys = []
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value and value not in keys:
+            keys.append(value)
+    for value in os.getenv("GEMINI_API_KEYS", "").split(","):
+        value = value.strip()
+        if value and value not in keys:
+            keys.append(value)
+    return keys
+
+
 def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
     from google import genai
-    client = genai.Client(api_key=require_env("GEMINI_API_KEY"))
 
-    for attempt in range(1, MAX_JSON_RETRY + 1):
-        user_msg = user_message + _get_length_hint(profile)
-        if attempt > 1:
-            user_msg += f"\n\n[ATTEMPT {attempt}] Output ONLY valid JSON, no markdown."
-
-        prompt = f"{system_prompt}\n\n{user_msg}"
-
-        try:
-            resp = client.models.generate_content(
-                model="gemini-1.5-flash",
-                contents=prompt,
-            )
-            if not resp.text:
-                raise ValueError("Gemini returned empty response")
-
-            return _parse_json_response(resp.text.strip(), profile)
-
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Gemini attempt {attempt}/{MAX_JSON_RETRY}: JSON parse gagal — {e}")
-            if attempt == MAX_JSON_RETRY:
+    keys = _gemini_api_keys()
+    if not keys:
+        raise RuntimeError("Tidak ada GEMINI_API_KEY yang dikonfigurasi")
+    errors = []
+    for key_index, api_key in enumerate(keys, start=1):
+        client = genai.Client(api_key=api_key)
+        for attempt in range(1, MAX_JSON_RETRY + 1):
+            user_msg = user_message + _get_length_hint(profile)
+            if attempt > 1:
+                user_msg += f"\n\n[ATTEMPT {attempt}] Output ONLY valid JSON, no markdown."
+            prompt = f"{system_prompt}\n\n{user_msg}"
+            try:
+                resp = client.models.generate_content(
+                    model=os.getenv("GEMINI_MODEL", "gemini-1.5-flash").strip(),
+                    contents=prompt,
+                )
+                if not resp.text:
+                    raise ValueError("Gemini returned empty response")
+                result = _parse_json_response(resp.text.strip(), profile)
+                logger.info(f"Gemini key slot {key_index} berhasil")
+                return result
+            except (json.JSONDecodeError, ValueError) as exc:
+                logger.warning(f"Gemini key slot {key_index}, attempt {attempt}/{MAX_JSON_RETRY}: JSON gagal — {exc}")
+                errors.append(f"key {key_index}: {type(exc).__name__}")
+                if attempt == MAX_JSON_RETRY:
+                    break
+            except Exception as exc:
+                err_str = str(exc).lower()
+                errors.append(f"key {key_index}: {type(exc).__name__}")
+                if "429" in err_str or "quota" in err_str or "rate" in err_str:
+                    logger.warning(f"Gemini key slot {key_index} terkena rate limit; mencoba key berikutnya")
+                    break
                 raise
-
-        except Exception as e:
-            err_str = str(e)
-            if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
-                wait = 60 if attempt == 1 else 120
-                logger.warning(f"Gemini rate limit, tunggu {wait}s...")
-                time.sleep(wait)
-            else:
-                raise
-
-    raise RuntimeError("Gemini gagal setelah semua retry")
+    raise RuntimeError("Semua Gemini API key gagal: " + "; ".join(errors))
 
 
 # ─── Anthropic ────────────────────────────────────────────────────────────────

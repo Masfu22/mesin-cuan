@@ -367,10 +367,14 @@ def _generate_candidates_via_ai(niche: str, language: str, hints=None,
             "gemini-2.5-flash",
         ])))
         gemini_errors = []
+        gemini_deadline = __import__('time').monotonic() + 120
         for model_name in models:
             for key_index, api_key in enumerate(keys, start=1):
+                if __import__('time').monotonic() >= gemini_deadline:
+                    raise TimeoutError("Batas waktu total Gemini topic 120 detik tercapai")
+                remaining_ms = max(1000, min(45000, int((gemini_deadline - __import__('time').monotonic()) * 1000)))
                 try:
-                    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=45000))
+                    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=remaining_ms))
                     response = client.models.generate_content(
                         model=model_name,
                         contents=prompt,

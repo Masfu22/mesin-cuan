@@ -826,9 +826,14 @@ def _run_qc_vision(video_path: str, thumbnail_path: str,
 
         qc_result = review_video(video_path, thumbnail_path, script_data, channel, profile)
 
-        status = qc_result.get("status", "APPROVED")
-        score  = qc_result.get("score", 8)
+        status = qc_result.get("status", "QC_ERROR")
+        score  = qc_result.get("score", 0)
         logger.info(f"[{channel['id']}] QC Score: {score}/10 | Status: {status}")
+
+        if status == "QC_ERROR":
+            raise RuntimeError(f"QC Vision tidak berhasil memverifikasi video: {qc_result.get('summary', 'unknown error')}")
+        if status not in ("APPROVED", "NEEDS_FIX"):
+            raise RuntimeError(f"Status QC tidak dikenal: {status}")
 
         if status == "APPROVED":
             logger.info(f"[{channel['id']}] ✅ QC APPROVED — video langsung diupload")
@@ -849,13 +854,16 @@ def _run_qc_vision(video_path: str, thumbnail_path: str,
         if fixes_applied:
             logger.info(f"[{channel['id']}] ✅ Auto-fix diterapkan: {fixes_applied}")
         else:
-            logger.info(f"[{channel['id']}] Tidak ada fix yang bisa diterapkan otomatis — upload versi original")
+            raise RuntimeError(
+                f"QC NEEDS_FIX tetapi tidak ada perbaikan otomatis yang berhasil; "
+                f"video ditahan agar tidak terunggah tanpa persetujuan QC."
+            )
 
         return fixed_video, fixed_thumb
 
     except Exception as e:
-        logger.warning(f"QC Vision error: {e} — skip QC, upload versi original")
-        return video_path, thumbnail_path
+        logger.error(f"QC Vision menghentikan pipeline (fail-closed): {e}")
+        raise
 
 # ── BARU: Fungsi Analytics ───────────────────────────────────────────────────
 def run_daily_analytics():

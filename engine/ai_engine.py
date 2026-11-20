@@ -335,28 +335,59 @@ def _run_ai_fallback(task_name: str, providers: list) -> str:
     raise RuntimeError(f"Semua provider AI gagal untuk {task_name}: " + "; ".join(errors))
 
 
-def _gemini_client():
+def _gemini_api_keys() -> list:
+    """Read one or more Gemini API keys without logging their values."""
+    keys = []
+    for name in ("GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3",
+                 "GEMINI_API_KEY_4", "GEMINI_API_KEY_5", "GEMINI_API_KEY_6",
+                 "GEMINI_API_KEY_7", "GEMINI_API_KEY_8", "GEMINI_API_KEY_9",
+                 "GEMINI_API_KEY_10"):
+        value = os.getenv(name, "").strip()
+        if value and value not in keys:
+            keys.append(value)
+    for value in os.getenv("GEMINI_API_KEYS", "").split(","):
+        value = value.strip()
+        if value and value not in keys:
+            keys.append(value)
+    return keys
+
+
+def _gemini_generate_content(contents):
+    """Try configured Gemini keys in order, supporting free-tier key rotation."""
     try:
         from google import genai
     except ImportError as exc:
         raise RuntimeError("google-genai belum terpasang; tambahkan google-genai ke requirements.txt") from exc
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY tidak ditemukan")
-    return genai.Client(api_key=api_key)
+
+    keys = _gemini_api_keys()
+    if not keys:
+        raise RuntimeError("Tidak ada GEMINI_API_KEY yang dikonfigurasi")
+    errors = []
+    for index, api_key in enumerate(keys, start=1):
+        try:
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=contents,
+            )
+            text = (getattr(response, "text", None) or "").strip()
+            if text:
+                logger.info(f"[ai] Gemini key slot {index} berhasil")
+                return text
+            raise RuntimeError("respons kosong")
+        except Exception as exc:
+            errors.append(f"key slot {index}: {type(exc).__name__}")
+            logger.warning(f"[ai] Gemini key slot {index} gagal ({type(exc).__name__}); mencoba key berikutnya")
+    raise RuntimeError("Semua Gemini API key gagal: " + "; ".join(errors))
 
 
 def _gemini_text(prompt: str) -> str:
-    """Gemini text fallback using the current google-genai SDK."""
-    response = _gemini_client().models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-    )
-    return (getattr(response, "text", None) or "").strip()
+    """Gemini text fallback using the current google-genai SDK and key rotation."""
+    return _gemini_generate_content(prompt)
 
 
 def _gemini_vision(prompt: str, images_b64: list) -> str:
-    """Gemini multimodal fallback for sampled JPEG video frames."""
+    """Gemini multimodal fallback for sampled JPEG video frames and key rotation."""
     import base64
     from google.genai import types
 
@@ -366,11 +397,7 @@ def _gemini_vision(prompt: str, images_b64: list) -> str:
             data=base64.b64decode(image),
             mime_type="image/jpeg",
         ))
-    response = _gemini_client().models.generate_content(
-        model=GEMINI_MODEL,
-        contents=parts,
-    )
-    return (getattr(response, "text", None) or "").strip()
+    return _gemini_generate_content(parts)
 
 
 # ─── Ollama Fallback ──────────────────────────────────────────────────────────

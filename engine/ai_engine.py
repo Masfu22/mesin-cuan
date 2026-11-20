@@ -230,7 +230,7 @@ def _analyze_frame_batch(frames: list, mode: str, min_clips: int,
         "video vision",
         [
             ("NVIDIA", lambda: _nvidia_vision(nvidia_key, NVIDIA_VISION_MODEL, prompt, images_b64)) if nvidia_key else None,
-            ("Gemini", lambda: _gemini_vision(prompt, images_b64)) if os.getenv("GEMINI_API_KEY", "").strip() else None,
+            ("Gemini", lambda: _gemini_vision(prompt, images_b64)) if _gemini_api_keys() else None,
             ("Ollama", lambda: _ollama_vision(OLLAMA_VISION_MODEL, prompt, images_b64)),
         ],
     )

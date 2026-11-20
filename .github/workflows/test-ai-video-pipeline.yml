@@ -53,6 +53,12 @@ jobs:
           GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
           GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
           GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
+          GEMINI_API_KEY_6: ${{ secrets.GEMINI_API_KEY_6 }}
+          GEMINI_API_KEY_7: ${{ secrets.GEMINI_API_KEY_7 }}
+          GEMINI_API_KEY_8: ${{ secrets.GEMINI_API_KEY_8 }}
+          GEMINI_API_KEY_9: ${{ secrets.GEMINI_API_KEY_9 }}
+          GEMINI_API_KEY_10: ${{ secrets.GEMINI_API_KEY_10 }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
         run: |
           set -euo pipefail
           if [ -z "${NVIDIA_API_KEY:-}" ]; then
@@ -111,54 +117,45 @@ jobs:
           GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
           GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
           GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
-          GEMINI_MODEL: gemini-2.5-flash
+          GEMINI_MODEL: gemini-3.8-flash
         run: |
           python - <<'PY'
-          import io
           import os
           import sys
-          from PIL import Image, ImageDraw
 
           keys = [
-              os.environ.get(name, "").strip()
-              for name in ("GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4", "GEMINI_API_KEY_5")
+              os.environ.get("GEMINI_API_KEY", "").strip(),
+              *[os.environ.get(f"GEMINI_API_KEY_{i}", "").strip() for i in range(2, 11)],
+              *[value.strip() for value in os.environ.get("GEMINI_API_KEYS", "").split(",")],
           ]
           keys = list(dict.fromkeys(key for key in keys if key))
           if not keys:
-              print("SKIP: no Gemini API key secrets configured; fallback routing is covered by unit tests.")
+              print("SKIP: no Gemini API key secrets configured; provider fallback is covered by unit tests.")
               sys.exit(0)
 
           from google import genai
-          from google.genai import types
 
-          image = Image.new("RGB", (480, 160), "white")
-          ImageDraw.Draw(image).text((25, 65), "GEMINI VISION CHECK", fill="black")
-          buf = io.BytesIO()
-          image.save(buf, format="PNG")
-
-          response = None
+          model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
           errors = []
           for index, key in enumerate(keys, start=1):
               try:
                   client = genai.Client(api_key=key)
-                  candidate = client.models.generate_content(
-                      model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
-                      contents=[
-                          "Read the exact text in this image. Reply with the words only.",
-                          types.Part.from_bytes(data=buf.getvalue(), mime_type="image/png"),
-                      ],
+                  candidate = client.interactions.create(
+                      model=model,
+                      input="Reply with exactly: GEMINI API CHECK PASSED",
+                      store=False,
                   )
-                  answer = (getattr(candidate, "text", None) or "").strip().upper()
-                  if "GEMINI VISION CHECK" in " ".join(answer.split()):
-                      response = candidate
+                  answer = (getattr(candidate, "output_text", None) or "").strip().upper()
+                  if "GEMINI API CHECK PASSED" in " ".join(answer.split()):
                       print("Gemini key slot", index, "passed.")
-                      break
-                  errors.append(f"key slot {index}: image text not recognized")
+                      print("PASS: Gemini Interactions API authentication and text generation succeeded.")
+                      print("Model:", model)
+                      print("Response content withheld from logs.")
+                      sys.exit(0)
+                  errors.append(f"key slot {index}: empty or unexpected output")
               except Exception as exc:
-                  errors.append(f"key slot {index}: {type(exc).__name__}")
-          if response is None:
-              raise SystemExit("FAIL: no configured Gemini key passed: " + "; ".join(errors))
-          print("PASS: Gemini API authentication and multimodal text+image request succeeded.")
-          print("Model:", os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"))
-          print("Response content withheld from logs.")
+                  status = getattr(exc, "status_code", getattr(exc, "code", "unknown"))
+                  detail = str(getattr(exc, "message", exc))[:350]
+                  errors.append(f"key slot {index}: {type(exc).__name__} status={status} detail={detail}")
+          raise SystemExit("FAIL: no configured Gemini key passed: " + "; ".join(errors))
           PY

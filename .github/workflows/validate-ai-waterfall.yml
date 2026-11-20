@@ -9,10 +9,12 @@ on:
       - main
     paths:
       - "engine/script_engine.py"
+      - "engine/research_engine.py"
       - ".github/workflows/run-mesin-cuan.yml"
       - ".env.example"
       - ".github/workflows/validate-ai-waterfall.yml"
       - ".github/workflows/test-nvidia-free.yml"
+      - ".github/workflows/test-script-generation-only.yml"
 
 permissions:
   contents: read

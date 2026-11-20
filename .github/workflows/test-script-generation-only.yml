@@ -53,7 +53,7 @@ jobs:
       GEMINI_API_KEY_9: ${{ secrets.GEMINI_API_KEY_9 }}
       GEMINI_API_KEY_10: ${{ secrets.GEMINI_API_KEY_10 }}
       GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
-      GEMINI_MODEL: gemini-4-hydrogen
+      GEMINI_MODEL: gemini-3.8-flash
       GEMINI_MAX_RETRIES: "2"
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}

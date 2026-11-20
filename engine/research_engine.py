@@ -15,7 +15,7 @@ import os
 import json
 import requests
 
-from engine.utils import get_logger, get_ollama_model
+from engine.utils import get_logger
 
 logger = get_logger("research_engine")
 
@@ -272,7 +272,7 @@ def _try_ollama_web_search(query: str, language: str) -> dict:
         api_key = os.environ.get("OLLAMA_API_KEY", "").strip()
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
-        resp = requests.post(f"{OLLAMA_BASE_URL}/chat/completions", headers=headers, json=payload, timeout=RESEARCH_TIMEOUT)
+        resp = requests.post(_ollama_chat_url(), headers=headers, json=payload, timeout=RESEARCH_TIMEOUT)
         resp.raise_for_status()
 
         data = resp.json()

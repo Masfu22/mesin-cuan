@@ -3,7 +3,7 @@ name: Mesin Cuan - Safe Production Dry Run
 on:
   workflow_run:
     workflows:
-      - Test AI Video Pipeline and Fallbacks
+      - Validate Mesin Cuan configuration
     types:
       - completed
     branches:

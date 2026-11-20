@@ -1,0 +1,111 @@
+name: Test NVIDIA Nemotron Vision
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/test-nvidia-vision.yml"
+      - "engine/ai_engine.py"
+      - "requirements.txt"
+
+permissions:
+  contents: read
+
+jobs:
+  nvidia-vision-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install NVIDIA API client and Pillow
+        run: python -m pip install --disable-pip-version-check "openai>=1.68.0" "Pillow>=10.3.0"
+
+      - name: Test NVIDIA Nemotron image understanding
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NVIDIA_MODEL: nvidia/nemotron-3.5-super-vl-120b-a12b
+        run: |
+          python - <<'PY'
+          import base64
+          import io
+          import os
+          import sys
+          from PIL import Image, ImageDraw
+          from openai import OpenAI
+
+          api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
+          if not api_key:
+              print("FAIL: GitHub Secret NVIDIA_API_KEY is missing or empty.")
+              sys.exit(1)
+
+          # Create a deterministic test image; no external image download required.
+          image = Image.new("RGB", (640, 240), "white")
+          draw = ImageDraw.Draw(image)
+          draw.rectangle((10, 10, 630, 230), outline="black", width=5)
+          draw.text((55, 90), "VISION CHECK 2026", fill="black")
+          buffer = io.BytesIO()
+          image.save(buffer, format="PNG")
+          image_data = base64.b64encode(buffer.getvalue()).decode("ascii")
+
+          model = os.environ.get(
+              "NVIDIA_MODEL",
+              "nvidia/nemotron-3.5-super-vl-120b-a12b",
+          )
+          client = OpenAI(
+              base_url="https://integrate.api.nvidia.com/v1",
+              api_key=api_key,
+              timeout=180.0,
+              max_retries=1,
+          )
+
+          try:
+              response = client.chat.completions.create(
+                  model=model,
+                  messages=[{
+                      "role": "user",
+                      "content": [
+                          {
+                              "type": "text",
+                              "text": "Read the large text in this image. Reply with the exact words only.",
+                          },
+                          {
+                              "type": "image_url",
+                              "image_url": {
+                                  "url": "data:image/png;base64," + image_data,
+                              },
+                          },
+                      ],
+                  }],
+                  temperature=0.2,
+                  max_tokens=256,
+                  stream=False,
+              )
+
+              answer = (response.choices[0].message.content or "").strip()
+              if not answer:
+                  print("FAIL: NVIDIA Vision returned empty content.")
+                  sys.exit(1)
+
+              normalized = " ".join(answer.upper().split())
+              if "VISION CHECK 2026" not in normalized:
+                  print("FAIL: Vision endpoint responded but did not identify the test image text.")
+                  print("A non-sensitive response preview:", answer[:300])
+                  sys.exit(1)
+
+              print("PASS: NVIDIA Vision accepted an image and recognized its text.")
+              print("Model:", model)
+              print("Image input: PNG data URL")
+              print("Response received: yes (full content withheld from logs).")
+          except Exception as exc:
+              print("FAIL: NVIDIA Vision request failed.")
+              print("Error type:", type(exc).__name__)
+              print("Error:", str(exc)[:1000])
+              sys.exit(1)
+          PY

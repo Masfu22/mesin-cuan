@@ -1,0 +1,141 @@
+name: Test AI Video Pipeline and Fallbacks
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/test-ai-video-pipeline.yml"
+      - "engine/ai_engine.py"
+      - "tests/test_ai_provider_fallback.py"
+      - "requirements.txt"
+
+permissions:
+  contents: read
+
+jobs:
+  fallback-unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install minimal dependencies
+        run: python -m pip install --disable-pip-version-check requests python-dotenv openai google-genai
+      - name: Test provider waterfall and Ollama HTTP contract
+        run: python -m unittest discover -s tests -p "test_ai_provider_fallback.py" -v
+
+  nvidia-video-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Install video AI dependencies
+        run: python -m pip install --disable-pip-version-check requests python-dotenv openai google-genai
+      - name: Run synthetic video through complete NVIDIA analysis pipeline
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NVIDIA_MODEL: nvidia/nemotron-3.5-super-vl-120b-a12b
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NVIDIA_API_KEY:-}" ]; then
+            echo "FAIL: NVIDIA_API_KEY secret is missing."
+            exit 1
+          fi
+          mkdir -p test-output
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i "testsrc2=size=640x360:rate=24:duration=15" \
+            -c:v libx264 -pix_fmt yuv420p -movflags +faststart test-output/synthetic-video.mp4
+          python - <<'PY'
+          import json
+          import os
+          from engine import ai_engine
+
+          video = "test-output/synthetic-video.mp4"
+          duration = ai_engine._get_video_duration(video)
+          if duration < 14:
+              raise SystemExit(f"FAIL: generated video duration invalid: {duration}")
+
+          clips = ai_engine.analyze(
+              [video],
+              "cinematic",
+              {"min_clips_per_video": 1, "max_total_clips": 2},
+          )
+          if not clips:
+              raise SystemExit("FAIL: full video analysis returned no valid clips.")
+          for clip in clips:
+              if clip["start_sec"] < 0 or clip["end_sec"] > duration or clip["end_sec"] <= clip["start_sec"]:
+                  raise SystemExit("FAIL: returned clip timestamps are outside the source video.")
+          print("PASS: FFmpeg → frame extraction → NVIDIA/Gemini/Ollama provider waterfall → JSON parser.")
+          print("Video duration:", round(duration, 2), "seconds")
+          print("Valid clips:", len(clips))
+          print("Clip metadata:", json.dumps(
+              [{"start": c["start"], "end": c["end"], "score": c["score"]} for c in clips],
+              ensure_ascii=False,
+          ))
+          PY
+
+  gemini-live-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Gemini SDK
+        run: python -m pip install --disable-pip-version-check google-genai Pillow
+      - name: Test Gemini text and image understanding when key is configured
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-2.5-flash
+        run: |
+          python - <<'PY'
+          import io
+          import os
+          import sys
+          from PIL import Image, ImageDraw
+
+          key = os.environ.get("GEMINI_API_KEY", "").strip()
+          if not key:
+              print("SKIP: GEMINI_API_KEY secret is not configured; fallback routing is covered by unit tests.")
+              sys.exit(0)
+
+          from google import genai
+          from google.genai import types
+
+          image = Image.new("RGB", (480, 160), "white")
+          ImageDraw.Draw(image).text((25, 65), "GEMINI VISION CHECK", fill="black")
+          buf = io.BytesIO()
+          image.save(buf, format="PNG")
+
+          client = genai.Client(api_key=key)
+          response = client.models.generate_content(
+              model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+              contents=[
+                  "Read the exact text in this image. Reply with the words only.",
+                  types.Part.from_bytes(data=buf.getvalue(), mime_type="image/png"),
+              ],
+          )
+          answer = (getattr(response, "text", None) or "").strip().upper()
+          if "GEMINI VISION CHECK" not in " ".join(answer.split()):
+              raise SystemExit("FAIL: Gemini responded but did not recognize the test image text.")
+          print("PASS: Gemini API authentication and multimodal text+image request succeeded.")
+          print("Model:", os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"))
+          print("Response content withheld from logs.")
+          PY

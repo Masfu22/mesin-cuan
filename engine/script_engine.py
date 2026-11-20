@@ -433,6 +433,7 @@ def _call_ollama_cloud(system_prompt: str, user_message: str, profile: str) -> d
                 {"role": "user", "content": user_msg},
             ],
             "stream": False,
+            "format": "json",
             "options": {"temperature": max(0.7, 1.0 - (attempt - 1) * 0.1), "num_predict": max_tokens},
         }
         try:

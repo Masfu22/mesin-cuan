@@ -322,7 +322,90 @@ def _generate_candidates_via_ai(niche: str, language: str, hints=None,
         f"{hints_text}"
     )
 
-    # ── PRIORITAS 1: Provider A ───────────────────────────────────────────────
+    # ── PRIORITAS 1: NVIDIA NIM ───────────────────────────────────────────────
+    nvidia_key = os.getenv("NVIDIA_API_KEY", "").strip()
+    if nvidia_key:
+        session = requests.Session()
+        session.trust_env = False
+        try:
+            base_url = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").strip().rstrip("/")
+            model_name = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3.5-super-vl-120b-a12b").strip()
+            response = session.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {nvidia_key}", "Content-Type": "application/json"},
+                json={
+                    "model": model_name,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.8,
+                    "max_tokens": 500,
+                },
+                timeout=45,
+            )
+            response.raise_for_status()
+            raw = response.json()["choices"][0]["message"]["content"]
+            topics = _parse_topic_list(raw)
+            if topics:
+                logger.info(f"NVIDIA topic berhasil: {model_name}")
+                return topics
+            raise ValueError("NVIDIA tidak mengembalikan topik valid")
+        except Exception as exc:
+            logger.warning(f"NVIDIA topic gagal ({type(exc).__name__}) -> mencoba Gemini")
+        finally:
+            session.close()
+
+    # ── FALLBACK: Gemini (SDK modern + seluruh key) ───────────────────────────
+    try:
+        from google import genai
+        from google.genai import types
+
+        keys = get_gemini_api_keys()
+        if not keys:
+            raise RuntimeError("Tidak ada GEMINI_API_KEY yang dikonfigurasi")
+        models = list(dict.fromkeys(filter(None, [
+            os.getenv("GEMINI_MODEL", "").strip(),
+            "gemini-3.8-flash",
+            "gemini-2.5-flash",
+        ])))
+        gemini_errors = []
+        for model_name in models:
+            for key_index, api_key in enumerate(keys, start=1):
+                try:
+                    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=45000))
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(temperature=0.8),
+                    )
+                    topics = _parse_topic_list(response.text or "")
+                    if topics:
+                        logger.info(f"Gemini topic berhasil: model={model_name}, key slot {key_index}")
+                        return topics
+                    raise ValueError("Gemini tidak mengembalikan daftar topik valid")
+                except Exception as key_exc:
+                    gemini_errors.append(f"{model_name}/key{key_index}:{type(key_exc).__name__}")
+                    logger.warning(f"Gemini topic gagal pada model={model_name}, key slot {key_index}: {type(key_exc).__name__}")
+        raise RuntimeError("; ".join(gemini_errors) or "Semua kombinasi Gemini gagal")
+    except Exception as exc:
+        logger.warning(f"Gemini topic failed: {exc} -> trying Anthropic...")
+
+    # ── FALLBACK: Groq (setelah NVIDIA dan Gemini) ────────────────────────────────────────────────────────
+    try:
+        from groq import Groq
+
+        client = Groq(api_key=require_env("GROQ_API_KEY"))
+        resp = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=1.1,
+            top_p=0.98,
+            frequency_penalty=0.50,
+            max_tokens=300,
+        )
+        return _clean_topic_list(json.loads(resp.choices[0].message.content.strip()))
+    except Exception as exc:
+        logger.warning(f"Groq topic failed: {exc} -> trying provider tambahan...")
+
+    # ── PROVIDER TAMBAHAN: Provider A ───────────────────────────────────────────────
     cfg_a = get_provider_config("a")
     if cfg_a["api_key"] and cfg_a["base_url"]:
         _sess = requests.Session()
@@ -349,7 +432,7 @@ def _generate_candidates_via_ai(niche: str, language: str, hints=None,
         finally:
             _sess.close()
 
-    # ── PRIORITAS 2: Provider B ───────────────────────────────────────────────
+    # ── PROVIDER TAMBAHAN: Provider B ───────────────────────────────────────────────
     cfg_b = get_provider_config("b")
     if cfg_b["api_key"] and cfg_b["base_url"]:
         _sess = requests.Session()
@@ -375,58 +458,6 @@ def _generate_candidates_via_ai(niche: str, language: str, hints=None,
             logger.warning(f"Provider B topic failed: {exc} -> trying Groq...")
         finally:
             _sess.close()
-
-    # ── FALLBACK: Groq ────────────────────────────────────────────────────────
-    try:
-        from groq import Groq
-
-        client = Groq(api_key=require_env("GROQ_API_KEY"))
-        resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=1.1,
-            top_p=0.98,
-            frequency_penalty=0.50,
-            max_tokens=300,
-        )
-        return _clean_topic_list(json.loads(resp.choices[0].message.content.strip()))
-    except Exception as exc:
-        logger.warning(f"Groq topic failed: {exc} -> trying Gemini...")
-
-    # ── FALLBACK: Gemini (SDK modern + seluruh key) ───────────────────────────
-    try:
-        from google import genai
-        from google.genai import types
-
-        keys = get_gemini_api_keys()
-        if not keys:
-            raise RuntimeError("Tidak ada GEMINI_API_KEY yang dikonfigurasi")
-        models = list(dict.fromkeys(filter(None, [
-            os.getenv("GEMINI_MODEL", "").strip(),
-            "gemini-3.8-flash",
-            "gemini-3.5-flash-lite",
-        ])))
-        gemini_errors = []
-        for model_name in models:
-            for key_index, api_key in enumerate(keys, start=1):
-                try:
-                    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=45000))
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(temperature=0.8),
-                    )
-                    topics = _parse_topic_list(response.text or "")
-                    if topics:
-                        logger.info(f"Gemini topic berhasil: model={model_name}, key slot {key_index}")
-                        return topics
-                    raise ValueError("Gemini tidak mengembalikan daftar topik valid")
-                except Exception as key_exc:
-                    gemini_errors.append(f"{model_name}/key{key_index}:{type(key_exc).__name__}")
-                    logger.warning(f"Gemini topic gagal pada model={model_name}, key slot {key_index}: {type(key_exc).__name__}")
-        raise RuntimeError("; ".join(gemini_errors) or "Semua kombinasi Gemini gagal")
-    except Exception as exc:
-        logger.warning(f"Gemini topic failed: {exc} -> trying Anthropic...")
 
     # ── FALLBACK: Anthropic ───────────────────────────────────────────────────
     try:

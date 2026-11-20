@@ -156,12 +156,9 @@ def generate(topic_data: dict, channel: dict, profile: str = "shorts") -> dict:
         user_message = f"{prefix}: {topic}{part_instruction}"
 
 
-    # ── Dual Parallel Generation + Cross-Provider Scoring ──────────────────
-    result = _generate_and_pick_best(system_prompt, user_message, profile, ch_id, channel=channel)
-    if result is None:
-        # Fallback: sequential waterfall (existing behavior, tidak ada perubahan)
-        logger.info(f"[{ch_id}] Parallel scorer tidak menghasilkan winner → fallback ke sequential")
-        result = _call_ai(system_prompt, user_message, profile=profile)
+    # Gunakan urutan waterfall asli. Parallel Provider-A/B tetap tersedia
+    # sebagai helper legacy, tetapi tidak mengambil alih generator utama.
+    result = _call_ai(system_prompt, user_message, profile=profile)
     result["topic"]              = topic
     result["profile"]            = profile
     result["is_viral_iteration"] = is_viral_iteration
@@ -205,46 +202,61 @@ def review_hook_only(script_data: dict, channel: dict, profile: str = "shorts") 
 
 
 def _call_ai(system_prompt: str, user_message: str, profile: str = "shorts") -> dict:
-    # Provider-A is the preferred writer. Provider-B remains a generation
-    # fallback for resilience, while its primary role is evaluation.
-    cfg_a = get_provider_config("a")
-    cfg_b = get_provider_config("b")
-    primary_providers = []
-    if cfg_a["base_url"] and cfg_a["api_key"]:
-        primary_providers.append(("Provider-A", lambda: _call_provider_a(system_prompt, user_message, profile)))
-    if cfg_b["base_url"] and cfg_b["api_key"]:
-        primary_providers.append(("Provider-B", lambda: _call_provider_b(system_prompt, user_message, profile)))
+    """
+    Original sequential waterfall:
+    DeepSeek/Ollama -> Groq -> Gemini -> Anthropic.
+    Provider yang belum dikonfigurasi dilewati tanpa menunggu timeout.
+    """
+    providers = []
+    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "").strip()
+    ollama_api_key = os.getenv("OLLAMA_API_KEY", "").strip()
 
-    # Fallback berurutan: NVIDIA NIM, Gemini, Anthropic, lalu Groq.
-    # Provider tanpa API key dilewati otomatis.
-    fallback_providers = []
-    if os.getenv("NVIDIA_API_KEY", "").strip():
-        fallback_providers.append(("NVIDIA NIM", lambda: _call_nvidia(system_prompt, user_message, profile)))
-    if os.getenv("GEMINI_API_KEY", "").strip():
-        fallback_providers.append(("Gemini", lambda: _call_gemini(system_prompt, user_message, profile)))
-    if os.getenv("ANTHROPIC_API_KEY", "").strip():
-        fallback_providers.append(("Anthropic", lambda: _call_anthropic(system_prompt, user_message, profile)))
+    if ollama_base_url:
+        if ollama_base_url.startswith("https://ollama.com") and not ollama_api_key:
+            logger.warning("DeepSeek/Ollama dilewati: OLLAMA_API_KEY belum dikonfigurasi.")
+        else:
+            providers.append((
+                "DeepSeek/Ollama",
+                lambda: _call_ollama(system_prompt, user_message, profile),
+            ))
+
     if os.getenv("GROQ_API_KEY", "").strip():
-        fallback_providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
-    providers = primary_providers + fallback_providers
+        providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
+    if os.getenv("GEMINI_API_KEY", "").strip():
+        providers.append(("Gemini", lambda: _call_gemini(system_prompt, user_message, profile)))
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        providers.append(("Anthropic", lambda: _call_anthropic(system_prompt, user_message, profile)))
+
+    # NVIDIA free endpoint hanya untuk pengujian/evaluasi eksplisit.
+    # Tidak diaktifkan pada workflow produksi karena ketentuan NVIDIA membatasi
+    # akses Developer Program gratis untuk prototyping dan testing.
+    if (
+        os.getenv("NVIDIA_ENABLE_FREE_FALLBACK", "").strip().lower() in {"1", "true", "yes"}
+        and os.getenv("NVIDIA_API_KEY", "").strip()
+    ):
+        providers.append(("NVIDIA NIM (evaluation)", lambda: _call_nvidia(system_prompt, user_message, profile)))
+
     if not providers:
-        raise RuntimeError("Tidak ada AI provider aktif. Isi minimal satu API key atau konfigurasi Provider-A/B.")
+        raise RuntimeError(
+            "Tidak ada AI provider script yang aktif. Konfigurasikan Ollama, Groq, Gemini, atau Anthropic."
+        )
 
     last_error = None
-    for name, fn in providers:
-        logger.info(f"Trying {name}...")
+    for index, (name, fn) in enumerate(providers):
+        logger.info(f"Trying {name} ({index + 1}/{len(providers)})...")
         try:
             result = fn()
-            logger.info(f"\u2705 {name} berhasil")
+            logger.info(f"✅ {name} berhasil")
+            result.setdefault("generator_provider", name)
             return result
-        except Exception as e:
-            last_error = e
-            logger.warning(f"\u274c {name} gagal: {e}")
-            if name not in ("Provider-A", "Provider-B"):
+        except Exception as exc:
+            last_error = exc
+            logger.warning(f"❌ {name} gagal: {exc}")
+            if index < len(providers) - 1:
                 logger.info(f"Tunggu {PROVIDER_SWITCH_DELAY}s sebelum provider berikutnya...")
                 time.sleep(PROVIDER_SWITCH_DELAY)
 
-    raise RuntimeError(f"Semua provider gagal. Error terakhir: {last_error}")
+    raise RuntimeError(f"Semua provider AI gagal. Error terakhir: {last_error}")
 
 
 # ─── Dual Parallel Generation + Cross-Provider Scoring ───────────────────────
@@ -503,8 +515,77 @@ def _call_provider_a(system_prompt: str, user_message: str, profile: str) -> dic
     raise RuntimeError(f"Provider-A: semua model/attempt gagal. Error terakhir: {last_error}")
 
 
-# Backward-compatible name for older internal callers.
-_call_ollama = _call_provider_a
+def _call_ollama(system_prompt: str, user_message: str, profile: str) -> dict:
+    """DeepSeek V3.1 melalui Ollama (lokal atau Ollama Cloud API)."""
+    base_url = os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/")
+    model = os.getenv("OLLAMA_MODEL", "deepseek-v3.1:671b-cloud").strip()
+    api_key = os.getenv("OLLAMA_API_KEY", "").strip()
+    if not base_url:
+        raise RuntimeError("OLLAMA_BASE_URL belum dikonfigurasi.")
+    if base_url.startswith("https://ollama.com") and not api_key:
+        raise RuntimeError("OLLAMA_API_KEY wajib untuk Ollama Cloud.")
+
+    max_tokens = SCRIPT_MAX_TOKENS_LONGFORM if profile == "long_form" else SCRIPT_MAX_TOKENS_SHORTS
+    system_with_json = (
+        system_prompt
+        + "\n\nCRITICAL: Respond with ONLY a raw JSON object. "
+        + "No markdown, no code fences, and no explanation."
+    )
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    last_error = None
+    for attempt in range(1, MAX_JSON_RETRY + 1):
+        user_msg = user_message + _get_length_hint(profile)
+        if attempt > 1:
+            user_msg += (
+                f"\n\n[ATTEMPT {attempt}] Output ONLY one valid JSON object. "
+                "Do not use markdown or explanatory text."
+            )
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_with_json},
+                {"role": "user", "content": user_msg},
+            ],
+            "stream": False,
+            "format": "json",
+            "options": {
+                "temperature": max(0.3, 0.75 - (attempt - 1) * 0.2),
+                "num_predict": max_tokens,
+                "num_ctx": 8192,
+            },
+        }
+        try:
+            response = _post_json_no_proxy(
+                f"{base_url}/api/chat",
+                headers=headers,
+                payload=payload,
+                timeout=(15, 600),
+            )
+            response.raise_for_status()
+            raw = response.json().get("message", {}).get("content", "").strip()
+            if not raw:
+                raise RuntimeError("Ollama mengembalikan respons kosong.")
+            result = _parse_json_response(raw, profile)
+            result["generator_model"] = model
+            return result
+        except requests.exceptions.ConnectionError as exc:
+            raise RuntimeError(f"Ollama tidak dapat dihubungi di {base_url}: {exc}") from exc
+        except requests.exceptions.Timeout as exc:
+            raise RuntimeError("Ollama timeout setelah menunggu hingga 600 detik.") from exc
+        except (json.JSONDecodeError, ValueError) as exc:
+            last_error = exc
+            logger.warning(f"Ollama attempt {attempt}/{MAX_JSON_RETRY}: JSON tidak valid — {exc}")
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            raise RuntimeError(f"Ollama HTTP {status}: {exc}") from exc
+
+    raise RuntimeError(f"Ollama gagal menghasilkan JSON valid: {last_error}")
+
+
+
 
 
 # ─── Provider-B (DeepSeek) ────────────────────────────────────────────────────
@@ -645,76 +726,139 @@ def _call_groq(system_prompt: str, user_message: str, profile: str) -> dict:
             raise  # Error non-JSON (rate limit, dll) langsung raise
 
 
-# ─── NVIDIA NIM ───────────────────────────────────────────────────────────────
+# ─── NVIDIA NIM (free developer endpoint: evaluation only) ────────────────────
 def _call_nvidia(system_prompt: str, user_message: str, profile: str) -> dict:
-    """Generate script melalui endpoint OpenAI-compatible NVIDIA NIM."""
+    """Call NVIDIA hosted NIM with bounded retries for free-tier throttling."""
     api_key = require_env("NVIDIA_API_KEY")
-    base_url = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").strip().rstrip("/")
-    model = os.getenv("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct").strip()
+    base_url = os.getenv(
+        "NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"
+    ).strip().rstrip("/")
+    model = os.getenv(
+        "NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b"
+    ).strip()
     max_tokens = SCRIPT_MAX_TOKENS_LONGFORM if profile == "long_form" else SCRIPT_MAX_TOKENS_SHORTS
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": system_prompt + "\n\nReturn only a valid JSON object."},
+            {
+                "role": "system",
+                "content": system_prompt + "\n\nReturn only a valid JSON object. No markdown.",
+            },
             {"role": "user", "content": user_message + _get_length_hint(profile)},
         ],
         "temperature": 0.7,
         "max_tokens": max_tokens,
         "stream": False,
     }
-    response = _post_json_no_proxy(
-        f"{base_url}/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        payload=payload,
-        timeout=300,
-    )
-    response.raise_for_status()
-    raw = response.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-    if not raw:
-        raise RuntimeError("NVIDIA NIM mengembalikan respons kosong")
-    result = _parse_json_response(raw, profile)
-    result["generator_model"] = model
-    return result
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    last_error = None
+    for attempt in range(1, 4):
+        response = _post_json_no_proxy(
+            f"{base_url}/chat/completions",
+            headers=headers,
+            payload=payload,
+            timeout=(15, 240),
+        )
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After", "")
+            try:
+                wait_seconds = min(120, max(5, int(float(retry_after)))) if retry_after else 30 * attempt
+            except (TypeError, ValueError):
+                wait_seconds = 30 * attempt
+            last_error = f"HTTP 429 rate limit; retry dalam {wait_seconds}s"
+            if attempt < 3:
+                logger.warning(f"NVIDIA NIM free-tier dibatasi (429); {last_error}.")
+                time.sleep(wait_seconds)
+                continue
+            raise RuntimeError(f"NVIDIA NIM free-tier tetap terkena rate limit setelah 3 percobaan: {last_error}")
+
+        if response.status_code in (500, 502, 503, 504):
+            last_error = f"HTTP {response.status_code}"
+            if attempt < 3:
+                wait_seconds = 5 * attempt
+                logger.warning(f"NVIDIA NIM sementara bermasalah ({last_error}); retry {attempt}/3 dalam {wait_seconds}s.")
+                time.sleep(wait_seconds)
+                continue
+
+        if response.status_code == 410:
+            raise RuntimeError(
+                "NVIDIA NIM mengembalikan HTTP 410: model/endpoint tidak lagi tersedia untuk akun ini. "
+                "Periksa model aktif di build.nvidia.com dan ubah NVIDIA_MODEL; tidak dilakukan retry."
+            )
+
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as exc:
+            status = response.status_code
+            detail = response.text[:400].replace(api_key, "[REDACTED]")
+            raise RuntimeError(f"NVIDIA NIM HTTP {status}: {detail}") from exc
+
+        raw = response.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        if not raw:
+            raise RuntimeError("NVIDIA NIM mengembalikan respons kosong.")
+        result = _parse_json_response(raw, profile)
+        result["generator_model"] = model
+        return result
+
+    raise RuntimeError(f"NVIDIA NIM gagal setelah retry terbatas: {last_error}")
 
 
 # ─── Gemini ───────────────────────────────────────────────────────────────────
 
 def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
+    """Gemini free-tier aware: retry terbatas, hormati retryDelay, lalu waterfall lanjut."""
     from google import genai
-    client = genai.Client(api_key=require_env("GEMINI_API_KEY"))
 
-    for attempt in range(1, MAX_JSON_RETRY + 1):
+    client = genai.Client(api_key=require_env("GEMINI_API_KEY"))
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    max_attempts = max(1, min(int(os.getenv("GEMINI_MAX_RETRIES", "3")), 5))
+
+    for attempt in range(1, max_attempts + 1):
         user_msg = user_message + _get_length_hint(profile)
         if attempt > 1:
             user_msg += f"\n\n[ATTEMPT {attempt}] Output ONLY valid JSON, no markdown."
-
         prompt = f"{system_prompt}\n\n{user_msg}"
 
         try:
-            resp = client.models.generate_content(
-                model="gemini-1.5-flash",
-                contents=prompt,
-            )
+            resp = client.models.generate_content(model=model, contents=prompt)
             if not resp.text:
                 raise ValueError("Gemini returned empty response")
-
             return _parse_json_response(resp.text.strip(), profile)
 
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Gemini attempt {attempt}/{MAX_JSON_RETRY}: JSON parse gagal — {e}")
-            if attempt == MAX_JSON_RETRY:
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning(f"Gemini attempt {attempt}/{max_attempts}: output/JSON tidak valid — {exc}")
+            if attempt == max_attempts:
                 raise
 
-        except Exception as e:
-            err_str = str(e)
-            if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
-                wait = 60 if attempt == 1 else 120
-                logger.warning(f"Gemini rate limit, tunggu {wait}s...")
-                time.sleep(wait)
+        except Exception as exc:
+            err_str = str(exc)
+            lower = err_str.lower()
+            retryable = any(token in lower for token in (
+                "429", "resource_exhausted", "quota", "rate limit",
+                "503", "502", "500", "unavailable", "server error",
+            ))
+            if not retryable or attempt == max_attempts:
+                raise
+
+            # Google sering menyertakan retryDelay seperti 'retryDelay: 32s'.
+            match = re.search(r"retryDelay['\" ]*[:=]['\" ]*(\d+(?:\.\d+)?)s", err_str, re.IGNORECASE)
+            if match:
+                wait = float(match.group(1))
             else:
-                raise
+                wait = 15 * (2 ** (attempt - 1))
+            wait = max(5, min(int(wait), 120))
+            logger.warning(
+                f"Gemini limit/gangguan sementara (percobaan {attempt}/{max_attempts}); "
+                f"coba ulang dalam {wait}s. Model={model}"
+            )
+            time.sleep(wait)
 
-    raise RuntimeError("Gemini gagal setelah semua retry")
+    raise RuntimeError("Gemini gagal setelah retry terbatas; waterfall akan lanjut ke provider berikutnya")
 
 
 # ─── Anthropic ────────────────────────────────────────────────────────────────
@@ -1751,9 +1895,18 @@ def review_and_iterate(script_data: dict, channel: dict, profile: str = "shorts"
                 f"[{channel['id']}] [review] Feedback loop tidak tersedia "
                 "— fallback ke legacy rewrite"
             )
-            first_review = _review_script_payload(
-                current, channel, threshold, mode="rewrite_if_below"
-            )
+            try:
+                first_review = _review_script_payload(
+                    current, channel, threshold, mode="rewrite_if_below"
+                )
+            except Exception as exc:
+                # Review AI bersifat peningkatan kualitas; kegagalannya tidak boleh
+                # menggagalkan naskah valid yang sudah berhasil dibuat.
+                logger.warning(
+                    f"[{channel['id']}] [review] Reviewer tidak tersedia ({exc}); "
+                    "naskah dipertahankan tanpa rewrite."
+                )
+                first_review = {}
             if isinstance(first_review.get("updated_script"), dict):
                 current   = _merge_reviewed_script(current, first_review["updated_script"], profile)
                 current   = inject_hook(current, channel)

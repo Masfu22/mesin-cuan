@@ -21,7 +21,7 @@ jobs:
           import os
           from urllib.parse import urlparse
 
-          base = os.getenv("OLLAMA_BASE_URL", "https://ollama.com").strip().rstrip("/")
+          base = (os.getenv("OLLAMA_BASE_URL", "").strip().rstrip("/") or "https://ollama.com")
           key = os.getenv("OLLAMA_API_KEY", "").strip()
           model = os.getenv("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
 

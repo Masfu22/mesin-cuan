@@ -196,10 +196,16 @@ jobs:
                      "GEMINI_API_KEY_8", "GEMINI_API_KEY_9", "GEMINI_API_KEY_10",
                      "GEMINI_API_KEYS", "GEMINI_MODEL", "GROQ_API_KEY",
                      "ANTHROPIC_API_KEY", "NVIDIA_API_KEY", "NVIDIA_MODEL", "NVIDIA_BASE_URL"]
+          gemini_keys = [
+              os.environ.get("GEMINI_API_KEY", ""),
+              *[os.environ.get(f"GEMINI_API_KEY_{i}", "") for i in range(2, 11)],
+              *os.environ.get("GEMINI_API_KEYS", "").split(","),
+          ]
+          has_gemini = any(value.strip() for value in gemini_keys)
           ai_ready = bool(
               (os.environ.get("PROVIDER_A_API_KEY") and os.environ.get("PROVIDER_A_BASE_URL"))
               or (os.environ.get("PROVIDER_B_API_KEY") and os.environ.get("PROVIDER_B_BASE_URL"))
-              or os.environ.get("GROQ_API_KEY") or os.environ.get("GEMINI_API_KEY")
+              or os.environ.get("GROQ_API_KEY") or has_gemini
               or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("NVIDIA_API_KEY")
           )
           lines = ["## Pemeriksaan konfigurasi Mesin Cuan — " + channel, "",
@@ -217,7 +223,7 @@ jobs:
           if missing_optional:
               print("INFO: Secret opsional belum diisi: " + ", ".join(missing_optional))
           if not ai_ready:
-              raise SystemExit("Tidak ada AI provider aktif. Isi minimal Provider A/B (API_KEY + BASE_URL), GROQ_API_KEY, GEMINI_API_KEY, atau ANTHROPIC_API_KEY.")
+              raise SystemExit("Tidak ada AI provider aktif. Isi minimal Provider A/B (API_KEY + BASE_URL), GROQ_API_KEY, salah satu GEMINI_API_KEY[_2.._10] / GEMINI_API_KEYS, atau ANTHROPIC_API_KEY.")
           print(f"Environment disiapkan untuk {channel}; nilai rahasia tidak ditampilkan.")
           PY
 

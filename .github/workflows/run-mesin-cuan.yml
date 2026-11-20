@@ -39,7 +39,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: mesin-cuan-production
+  group: ${{ inputs.dry_run && 'mesin-cuan-dry-run' || 'mesin-cuan-production' }}
   cancel-in-progress: false
 
 jobs:

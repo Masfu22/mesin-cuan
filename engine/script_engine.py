@@ -736,7 +736,7 @@ def _gemini_model_candidates() -> list[str]:
     """Model Gemini berurutan: override opsional, lalu model gratis resmi."""
     configured = os.getenv("GEMINI_MODEL", "").strip()
     candidates = [configured] if configured else []
-    candidates.extend(["gemini-4-hydrogen", "gemini-3.5-flash-lite"])
+    candidates.extend(["gemini-3.8-flash", "gemini-3.5-flash-lite"])
     return list(dict.fromkeys(model for model in candidates if model))
 
 

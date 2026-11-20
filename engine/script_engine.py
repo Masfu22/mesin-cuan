@@ -39,7 +39,7 @@ logger = get_logger("script_engine")
 MIN_WORDS = {"shorts": 80, "long_form": 1300}
 
 # Delay antar provider switch (detik)
-PROVIDER_SWITCH_DELAY = 60
+PROVIDER_SWITCH_DELAY = 2
 
 # Retry per provider kalau JSON gagal di-parse
 MAX_JSON_RETRY = 3
@@ -654,8 +654,8 @@ def _call_groq(system_prompt: str, user_message: str, profile: str) -> dict:
 def _call_nvidia(system_prompt: str, user_message: str, profile: str) -> dict:
     """Generate script melalui endpoint OpenAI-compatible NVIDIA NIM."""
     api_key = require_env("NVIDIA_API_KEY")
-    base_url = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").strip().rstrip("/")
-    model = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3.5-super-vl-120b-a12b").strip()
+    base_url = (os.getenv("NVIDIA_BASE_URL", "").strip() or "https://integrate.api.nvidia.com/v1").rstrip("/")
+    model = os.getenv("NVIDIA_MODEL", "").strip() or "nvidia/nemotron-3.5-super-vl-120b-a12b"
     max_tokens = SCRIPT_MAX_TOKENS_LONGFORM if profile == "long_form" else SCRIPT_MAX_TOKENS_SHORTS
     payload = {
         "model": model,
@@ -715,7 +715,7 @@ def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
             prompt = f"{system_prompt}\n\n{user_msg}"
             try:
                 resp = client.models.generate_content(
-                    model=os.getenv("GEMINI_MODEL", "gemini-1.5-flash").strip(),
+                    model=(os.getenv("GEMINI_MODEL", "").strip() or "gemini-2.5-flash"),
                     contents=prompt,
                 )
                 if not resp.text:

@@ -153,16 +153,14 @@ def _analyze_podcast(video_path: str, min_clips: int,
     duration_str    = _sec_to_ts(duration_sec)
     prompt          = _build_podcast_prompt(transcript_text, min_clips, duration_str, duration_sec)
 
-    if nvidia_key:
-        try:
-            logger.info(f"[ai] Kirim ke NVIDIA: {NVIDIA_TEXT_MODEL}")
-            response_text = _nvidia_text(nvidia_key, NVIDIA_TEXT_MODEL, prompt)
-        except Exception as exc:
-            logger.warning(f"[ai] NVIDIA gagal ({type(exc).__name__}); mencoba fallback Ollama.")
-            response_text = _ollama_text(OLLAMA_TEXT_MODEL, prompt)
-    else:
-        logger.info(f"[ai] Kirim ke Ollama: {OLLAMA_TEXT_MODEL}")
-        response_text = _ollama_text(OLLAMA_TEXT_MODEL, prompt)
+    response_text = _run_ai_fallback(
+        "podcast text",
+        [
+            ("NVIDIA", lambda: _nvidia_text(nvidia_key, NVIDIA_TEXT_MODEL, prompt)) if nvidia_key else None,
+            ("Gemini", lambda: _gemini_text(prompt)) if os.getenv("GEMINI_API_KEY", "").strip() else None,
+            ("Ollama", lambda: _ollama_text(OLLAMA_TEXT_MODEL, prompt)),
+        ],
+    )
 
     return _parse_response(response_text, video_path, duration_sec)
 
@@ -228,14 +226,14 @@ def _analyze_frame_batch(frames: list, mode: str, min_clips: int,
 
     prompt = _build_visual_prompt(mode, min_clips, time_labels, _sec_to_ts(batch_duration))
 
-    if nvidia_key:
-        try:
-            response_text = _nvidia_vision(nvidia_key, NVIDIA_VISION_MODEL, prompt, images_b64)
-        except Exception as exc:
-            logger.warning(f"[ai] NVIDIA Vision gagal ({type(exc).__name__}); mencoba fallback Ollama.")
-            response_text = _ollama_vision(OLLAMA_VISION_MODEL, prompt, images_b64)
-    else:
-        response_text = _ollama_vision(OLLAMA_VISION_MODEL, prompt, images_b64)
+    response_text = _run_ai_fallback(
+        "video vision",
+        [
+            ("NVIDIA", lambda: _nvidia_vision(nvidia_key, NVIDIA_VISION_MODEL, prompt, images_b64)) if nvidia_key else None,
+            ("Gemini", lambda: _gemini_vision(prompt, images_b64)) if os.getenv("GEMINI_API_KEY", "").strip() else None,
+            ("Ollama", lambda: _ollama_vision(OLLAMA_VISION_MODEL, prompt, images_b64)),
+        ],
+    )
 
     return _parse_response(response_text, source_path, batch_duration)
 
@@ -310,6 +308,69 @@ def _nvidia_vision(api_key: str, model: str, prompt: str, images_b64: list) -> s
         [{"role": "user", "content": content}],
         vision=True,
     )
+
+
+# ─── Provider waterfall: NVIDIA → Gemini → Ollama ─────────────────────────────
+
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+
+def _run_ai_fallback(task_name: str, providers: list) -> str:
+    """Try configured providers in order; preserve all fallback paths and report failures."""
+    errors = []
+    for provider in providers:
+        if provider is None:
+            continue
+        name, call = provider
+        try:
+            logger.info(f"[ai] {task_name}: mencoba {name}")
+            result = call()
+            if not isinstance(result, str) or not result.strip():
+                raise RuntimeError("respons kosong")
+            logger.info(f"[ai] {task_name}: {name} berhasil")
+            return result.strip()
+        except Exception as exc:
+            errors.append(f"{name}: {type(exc).__name__}")
+            logger.warning(f"[ai] {task_name}: {name} gagal ({type(exc).__name__}); lanjut ke provider berikutnya")
+    raise RuntimeError(f"Semua provider AI gagal untuk {task_name}: " + "; ".join(errors))
+
+
+def _gemini_client():
+    try:
+        from google import genai
+    except ImportError as exc:
+        raise RuntimeError("google-genai belum terpasang; tambahkan google-genai ke requirements.txt") from exc
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY tidak ditemukan")
+    return genai.Client(api_key=api_key)
+
+
+def _gemini_text(prompt: str) -> str:
+    """Gemini text fallback using the current google-genai SDK."""
+    response = _gemini_client().models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt,
+    )
+    return (getattr(response, "text", None) or "").strip()
+
+
+def _gemini_vision(prompt: str, images_b64: list) -> str:
+    """Gemini multimodal fallback for sampled JPEG video frames."""
+    import base64
+    from google.genai import types
+
+    parts = [prompt]
+    for image in images_b64:
+        parts.append(types.Part.from_bytes(
+            data=base64.b64decode(image),
+            mime_type="image/jpeg",
+        ))
+    response = _gemini_client().models.generate_content(
+        model=GEMINI_MODEL,
+        contents=parts,
+    )
+    return (getattr(response, "text", None) or "").strip()
 
 
 # ─── Ollama Fallback ──────────────────────────────────────────────────────────

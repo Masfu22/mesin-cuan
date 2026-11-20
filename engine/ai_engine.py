@@ -33,9 +33,13 @@ logger = get_logger("ai_engine")
 VALID_MODES = ["tiktok", "podcast", "cinematic"]
 
 # ── NVIDIA API config ──────────────────────────────────────────────────────────
-NVIDIA_BASE_URL   = "https://integrate.api.nvidia.com/v1"
-NVIDIA_TEXT_MODEL  = "meta/llama-3.1-70b-instruct"
-NVIDIA_VISION_MODEL = "meta/llama-4-maverick-17b-128e-instruct"
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+NVIDIA_MODEL = os.getenv("NVIDIA_MODEL") or "nvidia/nemotron-3.5-super-vl-120b-a12b"
+NVIDIA_TEXT_MODEL = NVIDIA_MODEL
+NVIDIA_VISION_MODEL = NVIDIA_MODEL
+
+# Ollama text fallback
+OLLAMA_TEXT_MODEL = os.getenv("OLLAMA_TEXT_MODEL", "llama3.2")
 
 # ── Ollama fallback config ─────────────────────────────────────────────────────
 OLLAMA_BASE_URL     = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -151,10 +155,14 @@ def _analyze_podcast(video_path: str, min_clips: int,
     prompt          = _build_podcast_prompt(transcript_text, min_clips, duration_str, duration_sec)
 
     if nvidia_key:
-        logger.info(f"[ai] Kirim ke NVIDIA: {NVIDIA_TEXT_MODEL}")
-        response_text = _nvidia_text(nvidia_key, NVIDIA_TEXT_MODEL, prompt)
+        try:
+            logger.info(f"[ai] Kirim ke NVIDIA: {NVIDIA_TEXT_MODEL}")
+            response_text = _nvidia_text(nvidia_key, NVIDIA_TEXT_MODEL, prompt)
+        except Exception as exc:
+            logger.warning(f"[ai] NVIDIA gagal ({type(exc).__name__}); mencoba fallback Ollama.")
+            response_text = _ollama_text(OLLAMA_TEXT_MODEL, prompt)
     else:
-        logger.info(f"[ai] Kirim ke Ollama: {get_ollama_model()}")
+        logger.info(f"[ai] Kirim ke Ollama: {OLLAMA_TEXT_MODEL}")
         response_text = _ollama_text(OLLAMA_TEXT_MODEL, prompt)
 
     return _parse_response(response_text, video_path, duration_sec)
@@ -222,7 +230,11 @@ def _analyze_frame_batch(frames: list, mode: str, min_clips: int,
     prompt = _build_visual_prompt(mode, min_clips, time_labels, _sec_to_ts(batch_duration))
 
     if nvidia_key:
-        response_text = _nvidia_vision(nvidia_key, NVIDIA_VISION_MODEL, prompt, images_b64)
+        try:
+            response_text = _nvidia_vision(nvidia_key, NVIDIA_VISION_MODEL, prompt, images_b64)
+        except Exception as exc:
+            logger.warning(f"[ai] NVIDIA Vision gagal ({type(exc).__name__}); mencoba fallback Ollama.")
+            response_text = _ollama_vision(OLLAMA_VISION_MODEL, prompt, images_b64)
     else:
         response_text = _ollama_vision(OLLAMA_VISION_MODEL, prompt, images_b64)
 
@@ -231,49 +243,74 @@ def _analyze_frame_batch(frames: list, mode: str, min_clips: int,
 
 # ─── NVIDIA API Calls ─────────────────────────────────────────────────────────
 
-def _nvidia_text(api_key: str, model: str, prompt: str) -> str:
-    """Text completion via NVIDIA API (OpenAI-compatible)."""
+def _nvidia_stream(api_key: str, model: str, messages: list, *, vision: bool = False) -> str:
+    """Call NVIDIA NIM using the official OpenAI-compatible streaming interface."""
     try:
         from openai import OpenAI
-    except ImportError:
-        raise RuntimeError("openai tidak terinstall: pip install openai")
+    except ImportError as exc:
+        raise RuntimeError("openai SDK belum terpasang; tambahkan openai ke requirements.txt") from exc
 
-    client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=api_key)
-
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=2048,
-        temperature=0.1,
+    client = OpenAI(
+        base_url=NVIDIA_BASE_URL,
+        api_key=api_key,
+        timeout=300.0,
+        max_retries=2,
     )
-    return response.choices[0].message.content or ""
+    stream = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=0.6 if vision else 1.0,
+        top_p=0.95,
+        max_tokens=16384,
+        extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+        stream=True,
+    )
+
+    output = []
+    finish_reason = None
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        choice = chunk.choices[0]
+        if choice.finish_reason:
+            finish_reason = choice.finish_reason
+        delta = choice.delta
+        # Reasoning tokens are deliberately not mixed into the JSON response.
+        content = getattr(delta, "content", None)
+        if isinstance(content, str):
+            output.append(content)
+
+    result = "".join(output).strip()
+    if finish_reason == "length":
+        raise RuntimeError("NVIDIA response terpotong karena batas max_tokens.")
+    if not result:
+        raise RuntimeError("NVIDIA mengembalikan respons kosong.")
+    return result
+
+
+def _nvidia_text(api_key: str, model: str, prompt: str) -> str:
+    """Text completion via NVIDIA Nemotron (OpenAI-compatible, streaming)."""
+    return _nvidia_stream(
+        api_key,
+        model,
+        [{"role": "user", "content": prompt}],
+        vision=False,
+    )
 
 
 def _nvidia_vision(api_key: str, model: str, prompt: str, images_b64: list) -> str:
-    """Vision completion via NVIDIA API — kirim frames sebagai base64."""
-    try:
-        from openai import OpenAI
-    except ImportError:
-        raise RuntimeError("openai tidak terinstall: pip install openai")
-
-    client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=api_key)
-
-    # Build content list: teks + semua gambar
-    content = []
-    for b64 in images_b64:
-        content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
-        })
+    """Vision completion via NVIDIA Nemotron; frames dikirim sebagai base64 data URL."""
+    content = [
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}}
+        for image in images_b64
+    ]
     content.append({"type": "text", "text": prompt})
-
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": content}],
-        max_tokens=2048,
-        temperature=0.1,
+    return _nvidia_stream(
+        api_key,
+        model,
+        [{"role": "user", "content": content}],
+        vision=True,
     )
-    return response.choices[0].message.content or ""
 
 
 # ─── Ollama Fallback ──────────────────────────────────────────────────────────

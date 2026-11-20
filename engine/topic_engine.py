@@ -15,6 +15,7 @@ import json
 import os
 import random
 import re
+import time
 from datetime import datetime
 
 import requests
@@ -367,7 +368,7 @@ def _generate_candidates_via_ai(niche: str, language: str, hints=None,
             "gemini-2.5-flash",
         ])))
         gemini_errors = []
-        gemini_deadline = __import__('time').monotonic() + 120
+        gemini_deadline = time.monotonic() + 120
         for model_name in models:
             for key_index, api_key in enumerate(keys, start=1):
                 if __import__('time').monotonic() >= gemini_deadline:

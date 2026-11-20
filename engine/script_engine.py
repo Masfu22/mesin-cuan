@@ -215,17 +215,18 @@ def _call_ai(system_prompt: str, user_message: str, profile: str = "shorts") -> 
     if cfg_b["base_url"] and cfg_b["api_key"]:
         primary_providers.append(("Provider-B", lambda: _call_provider_b(system_prompt, user_message, profile)))
 
-    # Fallback berurutan: NVIDIA NIM, Gemini, Anthropic, lalu Groq.
-    # Provider tanpa API key dilewati otomatis.
+    # Cloud fallback berurutan; provider tanpa Secret dilewati otomatis.
     fallback_providers = []
-    if os.getenv("NVIDIA_API_KEY", "").strip():
-        fallback_providers.append(("NVIDIA NIM", lambda: _call_nvidia(system_prompt, user_message, profile)))
+    if os.getenv("OLLAMA_API_KEY", "").strip():
+        fallback_providers.append(("Ollama Cloud", lambda: _call_ollama_cloud(system_prompt, user_message, profile)))
+    if os.getenv("GROQ_API_KEY", "").strip():
+        fallback_providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
     if os.getenv("GEMINI_API_KEY", "").strip():
         fallback_providers.append(("Gemini", lambda: _call_gemini(system_prompt, user_message, profile)))
     if os.getenv("ANTHROPIC_API_KEY", "").strip():
         fallback_providers.append(("Anthropic", lambda: _call_anthropic(system_prompt, user_message, profile)))
-    if os.getenv("GROQ_API_KEY", "").strip():
-        fallback_providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
+    if os.getenv("NVIDIA_API_KEY", "").strip():
+        fallback_providers.append(("NVIDIA NIM", lambda: _call_nvidia(system_prompt, user_message, profile)))
     providers = primary_providers + fallback_providers
     if not providers:
         raise RuntimeError("Tidak ada AI provider aktif. Isi minimal satu API key atau konfigurasi Provider-A/B.")
@@ -396,6 +397,73 @@ def _generate_and_pick_best(
     # Fallback ke sequential jika sama sekali tidak ada hasil
     logger.warning(f"[{ch_id}] Semua parallel attempt gagal total — fallback ke sequential")
     return None
+
+
+# ─── Ollama Cloud ──────────────────────────────────────────────────────────────
+
+def _call_ollama_cloud(system_prompt: str, user_message: str, profile: str) -> dict:
+    """Generate script using Ollama's hosted Cloud API, never localhost."""
+    api_key = os.getenv("OLLAMA_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("OLLAMA_API_KEY belum tersedia di GitHub Secrets.")
+    base_url = os.getenv("OLLAMA_BASE_URL", "https://ollama.com").strip().rstrip("/")
+    if not base_url.startswith("https://"):
+        raise RuntimeError("OLLAMA_BASE_URL harus menggunakan HTTPS.")
+    model = os.getenv("OLLAMA_MODEL", "deepseek-v3.1:671b-cloud").strip()
+    if not model:
+        raise RuntimeError("OLLAMA_MODEL kosong.")
+    max_tokens = SCRIPT_MAX_TOKENS_LONGFORM if profile == "long_form" else SCRIPT_MAX_TOKENS_SHORTS
+    system_with_json = system_prompt + (
+        "\n\nCRITICAL: Respond with ONLY a raw JSON object. No markdown, code fences, or explanation."
+    )
+    last_error = None
+    for attempt in range(1, MAX_JSON_RETRY + 1):
+        user_msg = user_message + _get_length_hint(profile)
+        if attempt > 1:
+            user_msg += f"\n\n[ATTEMPT {attempt}] Output ONLY valid JSON."
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_with_json},
+                {"role": "user", "content": user_msg},
+            ],
+            "stream": False,
+            "options": {"temperature": max(0.7, 1.0 - (attempt - 1) * 0.1), "num_predict": max_tokens},
+        }
+        try:
+            response = _post_json_no_proxy(
+                f"{base_url}/api/chat",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                payload=payload,
+                timeout=600,
+            )
+            response.raise_for_status()
+            raw = response.json().get("message", {}).get("content", "").strip()
+            if not raw:
+                raise ValueError("Ollama Cloud mengembalikan respons kosong.")
+            result = _parse_json_response(raw, profile)
+            result["generator_model"] = model
+            result["generator_provider"] = "ollama_cloud"
+            return result
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            detail = ""
+            if exc.response is not None:
+                try:
+                    detail = str(exc.response.json().get("error", ""))[:250]
+                except Exception:
+                    detail = exc.response.text[:250]
+            last_error = RuntimeError(f"Ollama Cloud HTTP {status}: {detail or 'request ditolak'}")
+            logger.warning(f"Ollama Cloud HTTP {status}, attempt {attempt}: {detail or 'request ditolak'}")
+            if status in (401, 403, 404):
+                break
+        except (requests.exceptions.Timeout, requests.exceptions.RequestException) as exc:
+            last_error = RuntimeError(f"Ollama Cloud koneksi gagal: {type(exc).__name__}")
+            logger.warning(f"Ollama Cloud koneksi gagal, attempt {attempt}: {type(exc).__name__}")
+        except (json.JSONDecodeError, ValueError) as exc:
+            last_error = exc
+            logger.warning(f"Ollama Cloud JSON gagal, attempt {attempt}/{MAX_JSON_RETRY}: {exc}")
+    raise RuntimeError(f"Ollama Cloud gagal: {last_error or 'tidak ada respons valid'}")
 
 
 # ─── DeepSeek via Ollama ──────────────────────────────────────────────────────

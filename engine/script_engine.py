@@ -250,6 +250,7 @@ def _call_ai(system_prompt: str, user_message: str, profile: str = "shorts") -> 
                 logger.info(f"Tunggu {PROVIDER_SWITCH_DELAY}s sebelum provider berikutnya...")
                 time.sleep(PROVIDER_SWITCH_DELAY)
             elif name == "Ollama Cloud":
+                # HTTP 402/billing and other cloud failures are not retried here; advance immediately.
                 logger.info("Lewati jeda retry Ollama Cloud; lanjutkan ke provider cadangan.")
 
     raise RuntimeError(f"Semua provider gagal. Error terakhir: {last_error}")

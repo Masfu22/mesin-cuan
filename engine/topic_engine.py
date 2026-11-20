@@ -21,7 +21,7 @@ import requests
 
 from engine.retention_engine import get_topic_hints
 from engine.trending_engine import get_trending_topics
-from engine.utils import channel_data_path, get_logger, require_env, save_json, timestamp, get_ollama_model, get_provider_config, get_provider_model
+from engine.utils import channel_data_path, get_logger, require_env, save_json, timestamp, get_ollama_model, get_provider_config, get_provider_model, get_gemini_api_keys
 
 logger = get_logger("topic_engine")
 
@@ -393,14 +393,33 @@ def _generate_candidates_via_ai(niche: str, language: str, hints=None,
     except Exception as exc:
         logger.warning(f"Groq topic failed: {exc} -> trying Gemini...")
 
-    # ── FALLBACK: Gemini ──────────────────────────────────────────────────────
+    # ── FALLBACK: Gemini (SDK modern + seluruh key) ───────────────────────────
     try:
-        import google.generativeai as genai
+        from google import genai
 
-        genai.configure(api_key=require_env("GEMINI_API_KEY"))
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        resp = model.generate_content(prompt)
-        return _clean_topic_list(json.loads(resp.text.strip().replace("```json", "").replace("```", "")))
+        keys = get_gemini_api_keys()
+        if not keys:
+            raise RuntimeError("Tidak ada GEMINI_API_KEY yang dikonfigurasi")
+        models = list(dict.fromkeys(filter(None, [
+            os.getenv("GEMINI_MODEL", "").strip(),
+            "gemini-3.8-flash",
+            "gemini-3.5-flash-lite",
+        ])))
+        gemini_errors = []
+        for model_name in models:
+            for key_index, api_key in enumerate(keys, start=1):
+                try:
+                    client = genai.Client(api_key=api_key)
+                    response = client.models.generate_content(model=model_name, contents=prompt)
+                    topics = _parse_topic_list(response.text or "")
+                    if topics:
+                        logger.info(f"Gemini topic berhasil: model={model_name}, key slot {key_index}")
+                        return topics
+                    raise ValueError("Gemini tidak mengembalikan daftar topik valid")
+                except Exception as key_exc:
+                    gemini_errors.append(f"{model_name}/key{key_index}:{type(key_exc).__name__}")
+                    logger.warning(f"Gemini topic gagal pada model={model_name}, key slot {key_index}: {type(key_exc).__name__}")
+        raise RuntimeError("; ".join(gemini_errors) or "Semua kombinasi Gemini gagal")
     except Exception as exc:
         logger.warning(f"Gemini topic failed: {exc} -> trying Anthropic...")
 

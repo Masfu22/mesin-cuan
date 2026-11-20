@@ -396,6 +396,7 @@ def _generate_candidates_via_ai(niche: str, language: str, hints=None,
     # ── FALLBACK: Gemini (SDK modern + seluruh key) ───────────────────────────
     try:
         from google import genai
+        from google.genai import types
 
         keys = get_gemini_api_keys()
         if not keys:
@@ -409,8 +410,12 @@ def _generate_candidates_via_ai(niche: str, language: str, hints=None,
         for model_name in models:
             for key_index, api_key in enumerate(keys, start=1):
                 try:
-                    client = genai.Client(api_key=api_key)
-                    response = client.models.generate_content(model=model_name, contents=prompt)
+                    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=45000))
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(temperature=0.8),
+                    )
                     topics = _parse_topic_list(response.text or "")
                     if topics:
                         logger.info(f"Gemini topic berhasil: model={model_name}, key slot {key_index}")

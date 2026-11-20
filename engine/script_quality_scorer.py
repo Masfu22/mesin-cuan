@@ -305,7 +305,7 @@ def _call_provider(provider: str, prompt: str) -> str:
             raise RuntimeError("GEMINI_API_KEY tidak tersedia")
         configured_model = os.getenv("GEMINI_MODEL", "").strip()
         models = [configured_model] if configured_model else []
-        models.extend(["gemini-4-hydrogen", "gemini-3.5-flash-lite"])
+        models.extend(["gemini-3.8-flash", "gemini-3.5-flash-lite"])
         models = list(dict.fromkeys(model for model in models if model))
         errors = []
         for model in models:

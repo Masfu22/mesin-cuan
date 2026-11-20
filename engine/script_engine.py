@@ -26,7 +26,7 @@ import concurrent.futures
 from copy import deepcopy
 from typing import Callable
 import requests
-from engine.utils import get_logger, require_env, load_prompt, timestamp, save_json, channel_data_path, get_ollama_model, get_provider_config, get_provider_model
+from engine.utils import get_logger, require_env, load_prompt, timestamp, save_json, channel_data_path, get_ollama_model, get_provider_config, get_provider_model, get_gemini_api_keys
 
 # ── BARU: Imports untuk fitur Hook & Retention ─────────────────────────────────
 from engine.hook_engine import inject_hook
@@ -718,18 +718,8 @@ def _call_nvidia(system_prompt: str, user_message: str, profile: str) -> dict:
 # ─── Gemini ───────────────────────────────────────────────────────────────────
 
 def _gemini_api_keys() -> list[str]:
-    """Ambil seluruh Gemini key tanpa pernah menulis nilainya ke log."""
-    names = ["GEMINI_API_KEY"] + [f"GEMINI_API_KEY_{i}" for i in range(2, 11)]
-    keys = []
-    for name in names:
-        value = os.getenv(name, "").strip()
-        if value and value not in keys:
-            keys.append(value)
-    for value in os.getenv("GEMINI_API_KEYS", "").split(","):
-        value = value.strip()
-        if value and value not in keys:
-            keys.append(value)
-    return keys
+    """Backward-compatible wrapper around the shared Gemini key collector."""
+    return get_gemini_api_keys()
 
 
 def _gemini_model_candidates() -> list[str]:

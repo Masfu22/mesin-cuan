@@ -216,9 +216,11 @@ def _try_ollama_native_search(query: str, language: str) -> dict:
 
 def _try_ollama_web_search(query: str, language: str) -> dict:
     """
-    Coba panggil Ollama dengan tool web_search via DuckDuckGo.
-    Jika model tidak support tools -> gagal graceful.
+    Coba panggil Ollama Cloud dengan tool web_search via DuckDuckGo.
+    Jika API key tidak tersedia atau model tidak support tools -> skip graceful.
     """
+    if not os.environ.get("OLLAMA_API_KEY", "").strip():
+        return {"context": "", "sources": [], "used": False, "provider": "none"}
     try:
         messages = [
             {

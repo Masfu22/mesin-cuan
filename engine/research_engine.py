@@ -23,7 +23,7 @@ PERPLEXITY_API_BASE = "https://api.perplexity.ai"
 PERPLEXITY_MODEL = os.environ.get("PERPLEXITY_MODEL", "perplexity/sonar")
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "https://ollama.com").rstrip("/")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "deepseek-v3.1:671b-cloud")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gpt-oss:20b").strip()\nif OLLAMA_MODEL.endswith("-cloud"):\n    OLLAMA_MODEL = OLLAMA_MODEL[:-6]
 
 RESEARCH_TIMEOUT = 30  # detik — cepat, jangan block pipeline terlalu lama
 MAX_CONTEXT_CHARS = 1800  # Batasi panjang context agar tidak membanjiri prompt

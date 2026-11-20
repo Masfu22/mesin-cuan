@@ -33,11 +33,12 @@ logger = get_logger("qc_vision")
 GEMINI_MODELS = [
     os.getenv("GEMINI_MODEL", "").strip(),
     "gemini-3.8-flash",
-    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
 ]
 
 # Batas waktu tunggu video diproses Gemini (detik)
-PROCESSING_TIMEOUT = 120
+PROCESSING_TIMEOUT = 90
+QC_TOTAL_TIMEOUT = 240
 
 
 # ─── Public: review ──────────────────────────────────────────────────────────
@@ -60,12 +61,17 @@ def review_video(video_path: str, thumbnail_path: str,
     prompt = _build_qc_prompt(script_data, channel, profile)
     models = list(dict.fromkeys(model for model in GEMINI_MODELS if model))
     errors = []
+    total_deadline = time.time() + QC_TOTAL_TIMEOUT
 
     logger.info(f"[{channel['id']}] QC Vision modern SDK; tersedia {len(keys)} Gemini key")
     for key_index, api_key in enumerate(keys, start=1):
-        client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=120000))
+        client = None
         video_file = None
         try:
+            remaining_ms = max(1000, min(45000, int((total_deadline - time.time()) * 1000)))
+            if time.time() >= total_deadline:
+                break
+            client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=remaining_ms))
             size_mb = os.path.getsize(video_path) / (1024 * 1024)
             logger.info(f"Upload video QC ({size_mb:.1f} MB), key slot {key_index}")
             video_file = client.files.upload(file=video_path)
@@ -80,7 +86,7 @@ def review_video(video_path: str, thumbnail_path: str,
                     # Some SDK responses omit state once the file is ready.
                     if state:
                         break
-                if time.time() >= deadline:
+                if time.time() >= min(deadline, total_deadline):
                     raise TimeoutError("Timeout pemrosesan video Gemini")
                 time.sleep(5)
                 video_file = client.files.get(name=video_file.name)
@@ -108,13 +114,13 @@ def review_video(video_path: str, thumbnail_path: str,
             errors.append(f"key{key_index}:{type(exc).__name__}")
             logger.warning(f"QC key slot {key_index} gagal: {type(exc).__name__}")
         finally:
-            if video_file is not None:
+            if video_file is not None and client is not None:
                 try:
                     client.files.delete(name=video_file.name)
                 except Exception as exc:
                     logger.warning(f"Gagal menghapus file QC Gemini: {type(exc).__name__}")
 
-    return _qc_error("Semua percobaan QC Gemini gagal: " + ", ".join(errors))
+    return _qc_error("Semua percobaan QC Gemini gagal/timeout: " + ", ".join(errors))
 
 
 def _qc_error(reason: str) -> dict:

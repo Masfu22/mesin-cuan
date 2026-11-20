@@ -811,41 +811,54 @@ def _call_nvidia(system_prompt: str, user_message: str, profile: str) -> dict:
 # ─── Gemini ───────────────────────────────────────────────────────────────────
 
 def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
+    """Gemini free-tier aware: retry terbatas, hormati retryDelay, lalu waterfall lanjut."""
     from google import genai
-    client = genai.Client(api_key=require_env("GEMINI_API_KEY"))
 
-    for attempt in range(1, MAX_JSON_RETRY + 1):
+    client = genai.Client(api_key=require_env("GEMINI_API_KEY"))
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    max_attempts = max(1, min(int(os.getenv("GEMINI_MAX_RETRIES", "3")), 5))
+
+    for attempt in range(1, max_attempts + 1):
         user_msg = user_message + _get_length_hint(profile)
         if attempt > 1:
             user_msg += f"\n\n[ATTEMPT {attempt}] Output ONLY valid JSON, no markdown."
-
         prompt = f"{system_prompt}\n\n{user_msg}"
 
         try:
-            resp = client.models.generate_content(
-                model="gemini-1.5-flash",
-                contents=prompt,
-            )
+            resp = client.models.generate_content(model=model, contents=prompt)
             if not resp.text:
                 raise ValueError("Gemini returned empty response")
-
             return _parse_json_response(resp.text.strip(), profile)
 
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Gemini attempt {attempt}/{MAX_JSON_RETRY}: JSON parse gagal — {e}")
-            if attempt == MAX_JSON_RETRY:
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning(f"Gemini attempt {attempt}/{max_attempts}: output/JSON tidak valid — {exc}")
+            if attempt == max_attempts:
                 raise
 
-        except Exception as e:
-            err_str = str(e)
-            if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
-                wait = 60 if attempt == 1 else 120
-                logger.warning(f"Gemini rate limit, tunggu {wait}s...")
-                time.sleep(wait)
+        except Exception as exc:
+            err_str = str(exc)
+            lower = err_str.lower()
+            retryable = any(token in lower for token in (
+                "429", "resource_exhausted", "quota", "rate limit",
+                "503", "502", "500", "unavailable", "server error",
+            ))
+            if not retryable or attempt == max_attempts:
+                raise
+
+            # Google sering menyertakan retryDelay seperti 'retryDelay: 32s'.
+            match = re.search(r"retryDelay['\" ]*[:=]['\" ]*(\\d+(?:\\.\\d+)?)s", err_str, re.IGNORECASE)
+            if match:
+                wait = float(match.group(1))
             else:
-                raise
+                wait = 15 * (2 ** (attempt - 1))
+            wait = max(5, min(int(wait), 120))
+            logger.warning(
+                f"Gemini limit/gangguan sementara (percobaan {attempt}/{max_attempts}); "
+                f"coba ulang dalam {wait}s. Model={model}"
+            )
+            time.sleep(wait)
 
-    raise RuntimeError("Gemini gagal setelah semua retry")
+    raise RuntimeError("Gemini gagal setelah retry terbatas; waterfall akan lanjut ke provider berikutnya")
 
 
 # ─── Anthropic ────────────────────────────────────────────────────────────────

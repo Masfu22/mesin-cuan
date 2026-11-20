@@ -732,15 +732,23 @@ def _gemini_api_keys() -> list[str]:
     return keys
 
 
+def _gemini_model_candidates() -> list[str]:
+    """Model Gemini berurutan: override opsional, lalu model gratis resmi."""
+    configured = os.getenv("GEMINI_MODEL", "").strip()
+    candidates = [configured] if configured else []
+    candidates.extend(["gemini-4-hydrogen", "gemini-3.5-flash-lite"])
+    return list(dict.fromkeys(model for model in candidates if model))
+
+
 def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
-    """Generate script via Gemini Interactions API; rotate configured keys on failure."""
+    """Generate via Gemini Interactions API; rotate keys and model fallback."""
     from google import genai
 
     keys = _gemini_api_keys()
     if not keys:
         raise RuntimeError("Tidak ada GEMINI_API_KEY yang dikonfigurasi")
 
-    model = (os.getenv("GEMINI_MODEL", "").strip() or "gemini-3.8-flash")
+    models = _gemini_model_candidates()
     max_attempts = MAX_JSON_RETRY
     errors = []
     prompt = (
@@ -751,41 +759,39 @@ def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
         + "\n\nReturn ONLY one valid JSON object. Do not use Markdown fences."
     )
 
-    for key_index, api_key in enumerate(keys, start=1):
-        client = genai.Client(api_key=api_key)
-        for attempt in range(1, max_attempts + 1):
-            try:
-                interaction = client.interactions.create(
-                    model=model,
-                    input=prompt,
-                )
-                raw = getattr(interaction, "output_text", None)
-                if not isinstance(raw, str) or not raw.strip():
-                    raise ValueError("Gemini Interactions API returned empty output_text")
-                result = _parse_json_response(raw.strip(), profile)
-                result["generator_model"] = model
-                logger.info(f"Gemini Interactions key slot {key_index} berhasil")
-                return result
-            except (json.JSONDecodeError, ValueError) as exc:
-                logger.warning(
-                    f"Gemini Interactions key slot {key_index}, attempt {attempt}/{max_attempts}: {exc}"
-                )
-                errors.append(f"key {key_index}: {type(exc).__name__}")
-                if attempt == max_attempts:
+    for model in models:
+        for key_index, api_key in enumerate(keys, start=1):
+            client = genai.Client(api_key=api_key)
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    interaction = client.interactions.create(
+                        model=model,
+                        input=prompt,
+                        store=False,
+                    )
+                    raw = getattr(interaction, "output_text", None)
+                    if not isinstance(raw, str) or not raw.strip():
+                        raise ValueError("Gemini Interactions API returned empty output_text")
+                    result = _parse_json_response(raw.strip(), profile)
+                    result["generator_model"] = model
+                    logger.info(f"Gemini Interactions model={model}, key slot {key_index} berhasil")
+                    return result
+                except (json.JSONDecodeError, ValueError) as exc:
+                    errors.append(f"model {model}/key {key_index}: {type(exc).__name__}")
+                    logger.warning(
+                        f"Gemini model={model}, key slot {key_index}, attempt {attempt}/{max_attempts}: {exc}"
+                    )
+                    if attempt == max_attempts:
+                        break
+                except Exception as exc:
+                    errors.append(f"model {model}/key {key_index}: {type(exc).__name__}")
+                    logger.warning(
+                        f"Gemini model={model}, key slot {key_index} gagal ({type(exc).__name__})"
+                    )
+                    # Coba key lain; jika semua key gagal, lanjut ke model fallback.
                     break
-            except Exception as exc:
-                err = str(exc).lower()
-                errors.append(f"key {key_index}: {type(exc).__name__}")
-                # Model/API yang salah tidak akan sembuh dengan mengganti key; hentikan
-                # agar penyebab sebenarnya terlihat dan provider waterfall berlanjut.
-                if any(token in err for token in ("404", "not_found", "model", "invalid_argument")):
-                    raise RuntimeError(f"Gemini Interactions API model={model}: {exc}") from exc
-                logger.warning(
-                    f"Gemini key slot {key_index} gagal ({type(exc).__name__}); mencoba key berikutnya"
-                )
-                break
 
-    raise RuntimeError("Semua Gemini API key gagal: " + "; ".join(errors))
+    raise RuntimeError("Semua kombinasi model/API key Gemini gagal: " + "; ".join(errors))
 
 # ─── Anthropic ────────────────────────────────────────────────────────────────
 
@@ -1964,28 +1970,32 @@ def _call_review_provider(provider: str, prompt: str) -> str:
         keys = _gemini_api_keys()
         if not keys:
             raise RuntimeError("Tidak ada GEMINI_API_KEY untuk reviewer")
-        model = (os.getenv("GEMINI_MODEL", "").strip() or "gemini-3.8-flash")
+        models = _gemini_model_candidates()
         errors = []
-        for key_index, api_key in enumerate(keys, start=1):
-            try:
-                client = genai.Client(api_key=api_key)
-                interaction = client.interactions.create(
-                    model=model,
-                    input=(
-                        "You are a ruthless retention-first YouTube Shorts editor. "
-                        "Return ONLY valid JSON matching the requested schema.\\n\\n"
-                        + prompt
-                    ),
-                )
-                raw = getattr(interaction, "output_text", None)
-                if isinstance(raw, str) and raw.strip():
-                    logger.info(f"Gemini reviewer key slot {key_index} berhasil")
-                    return raw.strip()
-                raise ValueError("Gemini reviewer mengembalikan output kosong")
-            except Exception as exc:
-                errors.append(f"key {key_index}: {type(exc).__name__}")
-                logger.warning(f"Gemini reviewer key slot {key_index} gagal: {exc}")
-        raise RuntimeError("Semua Gemini reviewer key gagal: " + "; ".join(errors))
+        for model in models:
+            for key_index, api_key in enumerate(keys, start=1):
+                try:
+                    client = genai.Client(api_key=api_key)
+                    interaction = client.interactions.create(
+                        model=model,
+                        input=(
+                            "You are a ruthless retention-first YouTube Shorts editor. "
+                            "Return ONLY valid JSON matching the requested schema.\\n\\n"
+                            + prompt
+                        ),
+                        store=False,
+                    )
+                    raw = getattr(interaction, "output_text", None)
+                    if isinstance(raw, str) and raw.strip():
+                        logger.info(f"Gemini reviewer model={model}, key slot {key_index} berhasil")
+                        return raw.strip()
+                    raise ValueError("Gemini reviewer mengembalikan output kosong")
+                except Exception as exc:
+                    errors.append(f"model {model}/key {key_index}: {type(exc).__name__}")
+                    logger.warning(
+                        f"Gemini reviewer model={model}, key slot {key_index} gagal ({type(exc).__name__})"
+                    )
+        raise RuntimeError("Semua kombinasi model/API key Gemini reviewer gagal: " + "; ".join(errors))
 
     if provider == "NVIDIA":
         from openai import OpenAI

@@ -1,0 +1,98 @@
+name: Test NVIDIA Nemotron API
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/test-nvidia-api.yml"
+      - "engine/ai_engine.py"
+      - "requirements.txt"
+
+permissions:
+  contents: read
+
+jobs:
+  nvidia-api-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install NVIDIA API client
+        run: python -m pip install --disable-pip-version-check "openai>=1.68.0"
+
+      - name: Test NVIDIA Nemotron text completion
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          NVIDIA_MODEL: nvidia/nemotron-3.5-super-vl-120b-a12b
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          from openai import OpenAI
+
+          api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
+          if not api_key:
+              print("FAIL: GitHub Secret NVIDIA_API_KEY is missing or empty.")
+              sys.exit(1)
+
+          model = os.environ.get(
+              "NVIDIA_MODEL",
+              "nvidia/nemotron-3.5-super-vl-120b-a12b",
+          )
+          client = OpenAI(
+              base_url="https://integrate.api.nvidia.com/v1",
+              api_key=api_key,
+              timeout=180.0,
+              max_retries=1,
+          )
+
+          try:
+              stream = client.chat.completions.create(
+                  model=model,
+                  messages=[{
+                      "role": "user",
+                      "content": "Reply with exactly this text and nothing else: NVIDIA_API_OK",
+                  }],
+                  temperature=1.0,
+                  top_p=0.95,
+                  max_tokens=16384,
+                  extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+                  stream=True,
+              )
+
+              parts = []
+              finish_reason = None
+              for chunk in stream:
+                  if not chunk.choices:
+                      continue
+                  choice = chunk.choices[0]
+                  if choice.finish_reason:
+                      finish_reason = choice.finish_reason
+                  text = getattr(choice.delta, "content", None)
+                  if isinstance(text, str):
+                      parts.append(text)
+
+              answer = "".join(parts).strip()
+              if not answer:
+                  print("FAIL: NVIDIA API returned no final text content.")
+                  print("Finish reason:", finish_reason)
+                  sys.exit(1)
+
+              print("PASS: NVIDIA API authentication and streaming completion succeeded.")
+              print("Model:", model)
+              print("Finish reason:", finish_reason)
+              print("Response received: yes (content withheld from logs).")
+          except Exception as exc:
+              # Do not print request headers, environment variables, or API key.
+              print("FAIL: NVIDIA API request failed.")
+              print("Error type:", type(exc).__name__)
+              print("Error:", str(exc)[:1200])
+              sys.exit(1)
+          PY

@@ -5,8 +5,8 @@ Primary  : Dual Parallel Generation (Provider-A + Provider-B) dengan Cross-Provi
            Generator A: Provider-A → Scored by: Provider-B
            Generator B: Provider-B → Scored by: Provider-A
            Winner (score tertinggi) yang lanjut ke TTS.
-Fallback : Sequential waterfall jika parallel gagal/score < threshold
-           Groq → Gemini → Anthropic (Groq TIDAK pernah jadi primary)
+Fallback : NVIDIA NIM → Gemini → Groq → Anthropic → Provider-A/Provider-B
+Parallel quality scoring tetap tersedia dan dapat diaktifkan melalui ENABLE_PARALLEL_PROVIDER_SCORING=1
 Support  : profile "shorts" dan "long_form" (Target 1300+ kata)
 
 Pengaman JSON & Karakter:
@@ -53,6 +53,9 @@ SHORTS_REVIEW_MAX_PASSES = 2
 SCRIPT_MAX_TOKENS_SHORTS = int(os.environ.get("SCRIPT_MAX_TOKENS_SHORTS", "2400"))
 SCRIPT_MAX_TOKENS_LONGFORM = int(os.environ.get("SCRIPT_MAX_TOKENS_LONGFORM", "7000"))
 SCRIPT_REVIEW_MAX_TOKENS = int(os.environ.get("SCRIPT_REVIEW_MAX_TOKENS", "3200"))
+
+# Waterfall NVIDIA-first adalah default. Parallel A/B tetap tersedia sebagai mode opsional.
+ENABLE_PARALLEL_PROVIDER_SCORING = os.environ.get("ENABLE_PARALLEL_PROVIDER_SCORING", "0").lower() in {"1", "true", "yes"}
 
 # ── Script Quality Scorer (parallel gate) ────────────────────────────────────
 # Threshold: jika max(score_A, score_B) >= ini → langsung lanjut
@@ -156,11 +159,15 @@ def generate(topic_data: dict, channel: dict, profile: str = "shorts") -> dict:
         user_message = f"{prefix}: {topic}{part_instruction}"
 
 
-    # ── Dual Parallel Generation + Cross-Provider Scoring ──────────────────
-    result = _generate_and_pick_best(system_prompt, user_message, profile, ch_id, channel=channel)
-    if result is None:
-        # Fallback: sequential waterfall (existing behavior, tidak ada perubahan)
-        logger.info(f"[{ch_id}] Parallel scorer tidak menghasilkan winner → fallback ke sequential")
+    # ── NVIDIA-first provider waterfall ───────────────────────────────────
+    # Parallel A/B scoring dipertahankan sebagai mode opsional agar tidak
+    # mengambil alih prioritas NVIDIA pada konfigurasi default.
+    if ENABLE_PARALLEL_PROVIDER_SCORING:
+        result = _generate_and_pick_best(system_prompt, user_message, profile, ch_id, channel=channel)
+        if result is None:
+            logger.info(f"[{ch_id}] Parallel scorer tidak menghasilkan winner → gunakan NVIDIA-first waterfall")
+            result = _call_ai(system_prompt, user_message, profile=profile)
+    else:
         result = _call_ai(system_prompt, user_message, profile=profile)
     result["topic"]              = topic
     result["profile"]            = profile
@@ -205,30 +212,28 @@ def review_hook_only(script_data: dict, channel: dict, profile: str = "shorts") 
 
 
 def _call_ai(system_prompt: str, user_message: str, profile: str = "shorts") -> dict:
-    # Provider-A is the preferred writer. Provider-B remains a generation
-    # fallback for resilience, while its primary role is evaluation.
+    # Urutan provider utama sesuai konfigurasi pengguna:
+    # NVIDIA → Gemini → Groq → provider tambahan.
+    # Provider yang tidak memiliki API key/config akan dilewati otomatis.
+    providers = []
+    if os.getenv("NVIDIA_API_KEY", "").strip():
+        providers.append(("NVIDIA NIM", lambda: _call_nvidia(system_prompt, user_message, profile)))
+    if os.getenv("GEMINI_API_KEY", "").strip():
+        providers.append(("Gemini", lambda: _call_gemini(system_prompt, user_message, profile)))
+    if os.getenv("GROQ_API_KEY", "").strip():
+        providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        providers.append(("Anthropic", lambda: _call_anthropic(system_prompt, user_message, profile)))
+
+    # Provider-A/B tetap tersedia sebagai fallback tambahan, bukan prioritas.
     cfg_a = get_provider_config("a")
     cfg_b = get_provider_config("b")
-    primary_providers = []
     if cfg_a["base_url"] and cfg_a["api_key"]:
-        primary_providers.append(("Provider-A", lambda: _call_provider_a(system_prompt, user_message, profile)))
+        providers.append(("Provider-A", lambda: _call_provider_a(system_prompt, user_message, profile)))
     if cfg_b["base_url"] and cfg_b["api_key"]:
-        primary_providers.append(("Provider-B", lambda: _call_provider_b(system_prompt, user_message, profile)))
-
-    # Fallback berurutan: NVIDIA NIM, Gemini, Anthropic, lalu Groq.
-    # Provider tanpa API key dilewati otomatis.
-    fallback_providers = []
-    if os.getenv("NVIDIA_API_KEY", "").strip():
-        fallback_providers.append(("NVIDIA NIM", lambda: _call_nvidia(system_prompt, user_message, profile)))
-    if os.getenv("GEMINI_API_KEY", "").strip():
-        fallback_providers.append(("Gemini", lambda: _call_gemini(system_prompt, user_message, profile)))
-    if os.getenv("ANTHROPIC_API_KEY", "").strip():
-        fallback_providers.append(("Anthropic", lambda: _call_anthropic(system_prompt, user_message, profile)))
-    if os.getenv("GROQ_API_KEY", "").strip():
-        fallback_providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
-    providers = primary_providers + fallback_providers
+        providers.append(("Provider-B", lambda: _call_provider_b(system_prompt, user_message, profile)))
     if not providers:
-        raise RuntimeError("Tidak ada AI provider aktif. Isi minimal satu API key atau konfigurasi Provider-A/B.")
+        raise RuntimeError("Tidak ada AI provider aktif. Isi NVIDIA_API_KEY, GEMINI_API_KEY, GROQ_API_KEY, atau konfigurasi provider tambahan.")
 
     last_error = None
     for name, fn in providers:
@@ -650,7 +655,7 @@ def _call_nvidia(system_prompt: str, user_message: str, profile: str) -> dict:
     """Generate script melalui endpoint OpenAI-compatible NVIDIA NIM."""
     api_key = require_env("NVIDIA_API_KEY")
     base_url = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").strip().rstrip("/")
-    model = os.getenv("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct").strip()
+    model = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3.5-super-vl-120b-a12b").strip()
     max_tokens = SCRIPT_MAX_TOKENS_LONGFORM if profile == "long_form" else SCRIPT_MAX_TOKENS_SHORTS
     payload = {
         "model": model,

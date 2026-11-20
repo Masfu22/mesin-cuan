@@ -365,7 +365,7 @@ def _generate_candidates_via_ai(niche: str, language: str, hints=None,
         models = list(dict.fromkeys(filter(None, [
             os.getenv("GEMINI_MODEL", "").strip(),
             "gemini-3.8-flash",
-            "gemini-2.5-flash",
+            "gemini-3.5-flash-lite",
         ])))
         gemini_errors = []
         gemini_deadline = time.monotonic() + 120

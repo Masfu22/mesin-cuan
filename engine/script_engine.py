@@ -414,7 +414,7 @@ def _call_ollama_cloud(system_prompt: str, user_message: str, profile: str) -> d
     base_url = os.getenv("OLLAMA_BASE_URL", "https://ollama.com").strip().rstrip("/")
     if not base_url.startswith("https://"):
         raise RuntimeError("OLLAMA_BASE_URL harus menggunakan HTTPS.")
-    model = os.getenv("OLLAMA_MODEL", "deepseek-v3.1:671b-cloud").strip()
+    model = os.getenv("OLLAMA_MODEL", "gpt-oss:20b").strip()\n    if model.endswith("-cloud"):\n        model = model[:-6]
     if not model:
         raise RuntimeError("OLLAMA_MODEL kosong.")
     max_tokens = SCRIPT_MAX_TOKENS_LONGFORM if profile == "long_form" else SCRIPT_MAX_TOKENS_SHORTS
@@ -461,7 +461,7 @@ def _call_ollama_cloud(system_prompt: str, user_message: str, profile: str) -> d
                     detail = exc.response.text[:250]
             last_error = RuntimeError(f"Ollama Cloud HTTP {status}: {detail or 'request ditolak'}")
             logger.warning(f"Ollama Cloud HTTP {status}, attempt {attempt}: {detail or 'request ditolak'}")
-            if status in (401, 403, 404):
+            if status in (401, 402, 403, 404):
                 break
         except (requests.exceptions.Timeout, requests.exceptions.RequestException) as exc:
             last_error = RuntimeError(f"Ollama Cloud koneksi gagal: {type(exc).__name__}")

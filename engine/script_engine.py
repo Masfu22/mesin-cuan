@@ -733,6 +733,7 @@ def _gemini_model_candidates() -> list[str]:
 def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
     """Generate via Gemini Interactions API; rotate keys and model fallback."""
     from google import genai
+    from google.genai import types
 
     keys = _gemini_api_keys()
     if not keys:
@@ -751,20 +752,23 @@ def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
 
     for model in models:
         for key_index, api_key in enumerate(keys, start=1):
-            client = genai.Client(api_key=api_key)
+            client = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(timeout=60000),
+            )
             for attempt in range(1, max_attempts + 1):
                 try:
-                    interaction = client.interactions.create(
+                    response = client.models.generate_content(
                         model=model,
-                        input=prompt,
-                        store=False,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(temperature=0.7),
                     )
-                    raw = getattr(interaction, "output_text", None)
+                    raw = getattr(response, "text", None)
                     if not isinstance(raw, str) or not raw.strip():
-                        raise ValueError("Gemini Interactions API returned empty output_text")
+                        raise ValueError("Gemini generate_content returned empty text")
                     result = _parse_json_response(raw.strip(), profile)
                     result["generator_model"] = model
-                    logger.info(f"Gemini Interactions model={model}, key slot {key_index} berhasil")
+                    logger.info(f"Gemini model={model}, key slot {key_index} berhasil")
                     return result
                 except (json.JSONDecodeError, ValueError) as exc:
                     errors.append(f"model {model}/key {key_index}: {type(exc).__name__}")

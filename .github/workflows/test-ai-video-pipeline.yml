@@ -133,7 +133,7 @@ jobs:
           GEMINI_API_KEY_9: ${{ secrets.GEMINI_API_KEY_9 }}
           GEMINI_API_KEY_10: ${{ secrets.GEMINI_API_KEY_10 }}
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
-          GEMINI_MODEL: gemini-3.8-flash
+          GEMINI_MODEL: gemini-3.5-flash-lite
         run: |
           python - <<'PY'
           import os
@@ -153,8 +153,8 @@ jobs:
           from google.genai import types
 
           models = list(dict.fromkeys([
-              os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip(),
-              "gemini-3.5-flash-lite",
+              os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite").strip(),
+              "gemini-3.8-flash",
           ]))
           errors = []
           for model in models:

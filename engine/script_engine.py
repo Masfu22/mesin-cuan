@@ -675,7 +675,7 @@ def _call_nvidia(system_prompt: str, user_message: str, profile: str) -> dict:
         messages=[
             {
                 "role": "system",
-                "content": system_prompt + "\\n\\nReturn ONLY one valid JSON object. Do not use Markdown fences.",
+                "content": system_prompt + "\n\nReturn ONLY one valid JSON object. Do not use Markdown fences.",
             },
             {
                 "role": "user",

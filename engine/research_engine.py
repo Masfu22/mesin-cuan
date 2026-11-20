@@ -244,7 +244,7 @@ def _try_ollama_web_search(query: str, language: str) -> dict:
         ]
         
         payload = {
-            "model": get_ollama_model(),
+            "model": OLLAMA_MODEL,
             "messages": messages,
             "tools": [
                 {
@@ -303,7 +303,7 @@ def _try_ollama_web_search(query: str, language: str) -> dict:
                 payload["messages"] = messages
                 payload.pop("tools", None)  # Hapus tools argumen krn kita mau final text
                 
-                resp2 = requests.post(f"{OLLAMA_BASE_URL}/chat/completions", headers=headers, json=payload, timeout=RESEARCH_TIMEOUT)
+                resp2 = requests.post(_ollama_chat_url(), headers=headers, json=payload, timeout=RESEARCH_TIMEOUT)
                 resp2.raise_for_status()
                 
                 content = resp2.json().get("message", {}).get("content", "").strip()

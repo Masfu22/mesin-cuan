@@ -260,8 +260,8 @@ def _build_provider_order(scorer_provider: str) -> list[str]:
 
     cfg_a = get_provider_config("a")
     cfg_b = get_provider_config("b")
-    has_a = bool(cfg_a["api_key"])
-    has_b = bool(cfg_b["api_key"])
+    has_a = bool(cfg_a["api_key"] and cfg_a["base_url"])
+    has_b = bool(cfg_b["api_key"] and cfg_b["base_url"])
 
     available = {"provider_a": has_a, "provider_b": has_b}
     order = []
@@ -303,21 +303,27 @@ def _call_provider(provider: str, prompt: str) -> str:
                 keys.append(value)
         if not keys:
             raise RuntimeError("GEMINI_API_KEY tidak tersedia")
-        model = os.getenv("GEMINI_MODEL", "").strip() or "gemini-3.8-flash"
+        configured_model = os.getenv("GEMINI_MODEL", "").strip()
+        models = [configured_model] if configured_model else []
+        models.extend(["gemini-4-hydrogen", "gemini-3.5-flash-lite"])
+        models = list(dict.fromkeys(model for model in models if model))
         errors = []
-        for index, key in enumerate(keys, start=1):
-            try:
-                response = genai.Client(api_key=key).interactions.create(
-                    model=model,
-                    input="Return ONLY valid JSON.\\n\\n" + prompt,
-                )
-                raw = getattr(response, "output_text", None)
-                if isinstance(raw, str) and raw.strip():
-                    return raw.strip()
-                raise ValueError("Gemini scorer mengembalikan output kosong")
-            except Exception as exc:
-                errors.append(f"key {index}: {type(exc).__name__}")
-        raise RuntimeError("Semua Gemini scorer key gagal: " + "; ".join(errors))
+        for model in models:
+            for index, key in enumerate(keys, start=1):
+                try:
+                    response = genai.Client(api_key=key).interactions.create(
+                        model=model,
+                        input="Return ONLY valid JSON.\\n\\n" + prompt,
+                        store=False,
+                    )
+                    raw = getattr(response, "output_text", None)
+                    if isinstance(raw, str) and raw.strip():
+                        return raw.strip()
+                    raise ValueError("Gemini scorer mengembalikan output kosong")
+                except Exception as exc:
+                    errors.append(f"model {model}/key {index}: {type(exc).__name__}")
+                    logger.debug(f"[scorer] Gemini model={model}, key slot {index} gagal ({type(exc).__name__})")
+        raise RuntimeError("Semua kombinasi model/API key Gemini scorer gagal: " + "; ".join(errors))
     elif provider == "nvidia":
         from openai import OpenAI
         client = OpenAI(

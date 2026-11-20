@@ -83,11 +83,18 @@ jobs:
           python - <<'PY'
           import os
           has_ollama = bool(os.getenv("OLLAMA_BASE_URL", "").strip() and os.getenv("OLLAMA_API_KEY", "").strip())
-          has_fallback = any(os.getenv(k, "").strip() for k in ("NVIDIA_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEYS", "ANTHROPIC_API_KEY"))
+          gemini_keys = [
+              os.getenv("GEMINI_API_KEY", ""),
+              *[os.getenv(f"GEMINI_API_KEY_{i}", "") for i in range(2, 11)],
+              *os.getenv("GEMINI_API_KEYS", "").split(","),
+          ]
+          has_gemini = any(value.strip() for value in gemini_keys)
+          has_fallback = any(os.getenv(k, "").strip() for k in ("NVIDIA_API_KEY", "GROQ_API_KEY", "ANTHROPIC_API_KEY")) or has_gemini
           print("Ollama Cloud:", "configured" if has_ollama else "missing")
+          print("Gemini API keys:", "configured" if has_gemini else "missing")
           print("Fallback provider:", "configured" if has_fallback else "none")
           if not (has_ollama or has_fallback):
-              raise SystemExit("No AI provider configured. Add Ollama Cloud or a fallback secret.")
+              raise SystemExit("No AI provider configured. Add Ollama Cloud or a fallback AI API key.")
           PY
 
       - name: Generate one script only (no TTS, render, Drive, or YouTube)

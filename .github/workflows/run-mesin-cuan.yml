@@ -33,7 +33,7 @@ on:
         description: Uji render tanpa mengunggah ke Google Drive
         required: true
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read

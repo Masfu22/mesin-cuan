@@ -23,8 +23,10 @@ PERPLEXITY_API_BASE = "https://api.perplexity.ai"
 PERPLEXITY_MODEL = os.environ.get("PERPLEXITY_MODEL", "perplexity/sonar")
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "").strip().rstrip("/") or "https://ollama.com"
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "").strip() or "glm-5.3-flash:cloud"
 if OLLAMA_MODEL.endswith("-cloud"):
+    OLLAMA_MODEL = OLLAMA_MODEL[:-6]
+elif OLLAMA_MODEL.endswith(":cloud"):
     OLLAMA_MODEL = OLLAMA_MODEL[:-6]
 
 RESEARCH_TIMEOUT = 30  # detik — cepat, jangan block pipeline terlalu lama

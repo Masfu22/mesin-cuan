@@ -2,9 +2,8 @@
 ai_engine.py - Analisis video via NVIDIA API (OpenAI-compatible, gratis)
 
 Backend:
-  - Text (podcast) : NVIDIA API → deepseek-ai/deepseek-v3-0324
-  - Vision (tiktok) : NVIDIA API → meta/llama-4-maverick-17b-128e-instruct
-  - Fallback        : Ollama lokal (kalau NVIDIA_API_KEY tidak ada)
+  - Text + Vision  : NVIDIA NIM → nvidia/nemotron-3.5-super-vl-120b-a12b
+  - Fallback        : Ollama lokal jika NVIDIA gagal atau key tidak tersedia
 
 Setup .env:
   NVIDIA_API_KEY=nvapi-xxxxx

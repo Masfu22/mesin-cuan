@@ -12,6 +12,7 @@ on:
       - ".github/workflows/run-mesin-cuan.yml"
       - ".env.example"
       - ".github/workflows/validate-ai-waterfall.yml"
+      - ".github/workflows/test-nvidia-free.yml"
 
 permissions:
   contents: read
@@ -42,10 +43,11 @@ jobs:
           end = source.index("# ─── Dual Parallel Generation", start)
           ai = source[start:end]
 
-          labels = ['"DeepSeek/Ollama"', '"Groq"', '"Gemini"', '"Anthropic"']
+          labels = ['"DeepSeek/Ollama"', '"Groq"', '"Gemini"', '"Anthropic"', '"NVIDIA NIM (evaluation)"']
           positions = [ai.index(label) for label in labels]
           assert positions == sorted(positions), "AI provider order is not the original waterfall"
-          assert '"NVIDIA NIM"' not in ai, "NVIDIA must not be in the script-generation chain"
+          assert 'NVIDIA_ENABLE_FREE_FALLBACK' in ai, "NVIDIA free API must be explicitly gated"
+          assert 'NVIDIA_API_KEY' in ai, "NVIDIA evaluation fallback must require a key"
 
           generate_start = source.index("def generate(")
           generate_end = source.index("def review_hook_only(", generate_start)
@@ -61,5 +63,9 @@ jobs:
                       "TOKEN_CH_EN_HORROR", "TOKEN_CH_EN_PSYCH"):
               assert key in workflow, f"Missing workflow environment key: {key}"
 
-          print("PASS: Python syntax, original provider order, and preserved integration variables.")
+          assert "NVIDIA_ENABLE_FREE_FALLBACK" not in workflow, "Free NVIDIA evaluation fallback must not be enabled in production workflow"
+          nvidia_test = Path(".github/workflows/test-nvidia-free.yml").read_text(encoding="utf-8")
+          assert "workflow_dispatch:" in nvidia_test, "NVIDIA connection test must be manual only"
+          assert "NVIDIA_API_KEY" in nvidia_test and "chat/completions" in nvidia_test
+          print("PASS: Python syntax, original provider order, NVIDIA evaluation gate, and preserved integration variables.")
           PY

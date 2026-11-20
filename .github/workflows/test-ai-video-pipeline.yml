@@ -128,7 +128,7 @@ jobs:
           GEMINI_API_KEY_9: ${{ secrets.GEMINI_API_KEY_9 }}
           GEMINI_API_KEY_10: ${{ secrets.GEMINI_API_KEY_10 }}
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
-          GEMINI_MODEL: gemini-2.5-flash
+          GEMINI_MODEL: gemini-3.8-flash
         run: |
           python - <<'PY'
           import io
@@ -160,7 +160,7 @@ jobs:
               try:
                   client = genai.Client(api_key=key)
                   text_check = client.models.generate_content(
-                      model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+                      model=os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
                       contents="Reply with exactly: GEMINI TEXT CHECK",
                   )
                   text_answer = (getattr(text_check, "text", None) or "").strip().upper()
@@ -169,7 +169,7 @@ jobs:
                   print("Gemini text key slot", index, "passed.")
 
                   candidate = client.models.generate_content(
-                      model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+                      model=os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
                       contents=[
                           "Read the exact text in this image. Reply with the words only.",
                           types.Part.from_bytes(data=buf.getvalue(), mime_type="image/png"),
@@ -187,6 +187,6 @@ jobs:
           if response is None:
               raise SystemExit("FAIL: no configured Gemini key passed: " + "; ".join(errors))
           print("PASS: Gemini API authentication and multimodal text+image request succeeded.")
-          print("Model:", os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"))
+          print("Model:", os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"))
           print("Response content withheld from logs.")
           PY

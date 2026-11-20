@@ -117,6 +117,12 @@ jobs:
           GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
           GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
           GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
+          GEMINI_API_KEY_6: ${{ secrets.GEMINI_API_KEY_6 }}
+          GEMINI_API_KEY_7: ${{ secrets.GEMINI_API_KEY_7 }}
+          GEMINI_API_KEY_8: ${{ secrets.GEMINI_API_KEY_8 }}
+          GEMINI_API_KEY_9: ${{ secrets.GEMINI_API_KEY_9 }}
+          GEMINI_API_KEY_10: ${{ secrets.GEMINI_API_KEY_10 }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           GEMINI_MODEL: gemini-3.8-flash
         run: |
           python - <<'PY'
@@ -134,12 +140,16 @@ jobs:
               sys.exit(0)
 
           from google import genai
+          from google.genai import types
 
           model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
           errors = []
           for index, key in enumerate(keys, start=1):
               try:
-                  client = genai.Client(api_key=key)
+                  client = genai.Client(
+                      api_key=key,
+                      http_options=types.HttpOptions(timeout=30000),
+                  )
                   candidate = client.interactions.create(
                       model=model,
                       input="Reply with exactly: GEMINI API CHECK PASSED",

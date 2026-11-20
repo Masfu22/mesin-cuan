@@ -156,17 +156,13 @@ def generate(topic_data: dict, channel: dict, profile: str = "shorts") -> dict:
         user_message = f"{prefix}: {topic}{part_instruction}"
 
 
-    # Ollama Cloud menjadi generator pertama jika Secret tersedia.
-    # Jalur parallel Provider-A/B tetap dipertahankan untuk konfigurasi tanpa Ollama.
-    if os.getenv("OLLAMA_API_KEY", "").strip():
-        logger.info(f"[{ch_id}] Ollama Cloud aktif — gunakan waterfall berurutan")
+    # Pertahankan arsitektur asli upstream: Provider-A + Provider-B
+    # generate paralel dan saling cross-score. Ollama Cloud hanya provider
+    # cadangan di waterfall jika generator utama dan Groq gagal.
+    result = _generate_and_pick_best(system_prompt, user_message, profile, ch_id, channel=channel)
+    if result is None:
+        logger.info(f"[{ch_id}] Parallel scorer tidak menghasilkan winner → fallback ke sequential")
         result = _call_ai(system_prompt, user_message, profile=profile)
-    else:
-        # ── Dual Parallel Generation + Cross-Provider Scoring ───────────────
-        result = _generate_and_pick_best(system_prompt, user_message, profile, ch_id, channel=channel)
-        if result is None:
-            logger.info(f"[{ch_id}] Parallel scorer tidak menghasilkan winner → fallback ke sequential")
-            result = _call_ai(system_prompt, user_message, profile=profile)
     result["topic"]              = topic
     result["profile"]            = profile
     result["is_viral_iteration"] = is_viral_iteration
@@ -215,17 +211,18 @@ def _call_ai(system_prompt: str, user_message: str, profile: str = "shorts") -> 
     cfg_a = get_provider_config("a")
     cfg_b = get_provider_config("b")
     primary_providers = []
-    if os.getenv("OLLAMA_API_KEY", "").strip():
-        primary_providers.append(("Ollama Cloud", lambda: _call_ollama_cloud(system_prompt, user_message, profile)))
     if cfg_a["base_url"] and cfg_a["api_key"]:
         primary_providers.append(("Provider-A", lambda: _call_provider_a(system_prompt, user_message, profile)))
     if cfg_b["base_url"] and cfg_b["api_key"]:
         primary_providers.append(("Provider-B", lambda: _call_provider_b(system_prompt, user_message, profile)))
 
-    # Fallback berurutan; provider tanpa Secret dilewati otomatis.
+    # Pertahankan fallback asli Groq; Ollama Cloud ditambahkan sebagai
+    # fallback berikutnya, lalu provider opsional lainnya.
     fallback_providers = []
     if os.getenv("GROQ_API_KEY", "").strip():
         fallback_providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
+    if os.getenv("OLLAMA_API_KEY", "").strip():
+        fallback_providers.append(("Ollama Cloud", lambda: _call_ollama_cloud(system_prompt, user_message, profile)))
     if os.getenv("GEMINI_API_KEY", "").strip():
         fallback_providers.append(("Gemini", lambda: _call_gemini(system_prompt, user_message, profile)))
     if os.getenv("ANTHROPIC_API_KEY", "").strip():
@@ -246,12 +243,9 @@ def _call_ai(system_prompt: str, user_message: str, profile: str = "shorts") -> 
         except Exception as e:
             last_error = e
             logger.warning(f"\u274c {name} gagal: {e}")
-            if name not in ("Provider-A", "Provider-B", "Ollama Cloud"):
+            if name not in ("Provider-A", "Provider-B"):
                 logger.info(f"Tunggu {PROVIDER_SWITCH_DELAY}s sebelum provider berikutnya...")
                 time.sleep(PROVIDER_SWITCH_DELAY)
-            elif name == "Ollama Cloud":
-                # HTTP 402/billing and other cloud failures are not retried here; advance immediately.
-                logger.info("Lewati jeda retry Ollama Cloud; lanjutkan ke provider cadangan.")
 
     raise RuntimeError(f"Semua provider gagal. Error terakhir: {last_error}")
 

@@ -5,7 +5,7 @@ Alur:
   1. Upload video ke Gemini File API
   2. Gemini "menonton" video dan analisa semua aspek
   3. Return keputusan: APPROVED atau NEEDS_FIX + daftar masalah + saran
-  4. Kalau NEEDS_FIX → auto-fix 1x → langsung upload ke GDrive
+  4. Kalau NEEDS_FIX → auto-fix 1x → QC ulang → hanya APPROVED yang lanjut
   5. Hapus file dari Gemini setelah selesai
 
 Aspek yang dicek:

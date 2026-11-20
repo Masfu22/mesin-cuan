@@ -742,7 +742,7 @@ def _call_nvidia(system_prompt: str, user_message: str, profile: str) -> dict:
         "messages": [
             {
                 "role": "system",
-                "content": system_prompt + "\\n\\nReturn only a valid JSON object. No markdown.",
+                "content": system_prompt + "\n\nReturn only a valid JSON object. No markdown.",
             },
             {"role": "user", "content": user_message + _get_length_hint(profile)},
         ],

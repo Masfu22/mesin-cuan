@@ -851,14 +851,26 @@ def _run_qc_vision(video_path: str, thumbnail_path: str,
         fixed_thumb    = fix_result.get("thumbnail_path", thumbnail_path)
         fixes_applied  = fix_result.get("fixes_applied", [])
 
-        if fixes_applied:
-            logger.info(f"[{channel['id']}] ✅ Auto-fix diterapkan: {fixes_applied}")
-        else:
+        if not fixes_applied:
             raise RuntimeError(
                 f"QC NEEDS_FIX tetapi tidak ada perbaikan otomatis yang berhasil; "
                 f"video ditahan agar tidak terunggah tanpa persetujuan QC."
             )
 
+        logger.info(f"[{channel['id']}] Auto-fix diterapkan: {fixes_applied}; jalankan QC ulang.")
+        second_qc = review_video(fixed_video, fixed_thumb, script_data, channel, profile)
+        second_status = second_qc.get("status", "QC_ERROR")
+        logger.info(
+            f"[{channel['id']}] QC ulang: {second_status} "
+            f"| {second_qc.get('score', 0)}/10"
+        )
+        if second_status != "APPROVED":
+            raise RuntimeError(
+                "Video tetap ditahan setelah auto-fix karena QC ulang tidak APPROVED: "
+                + str(second_qc.get("summary", second_status))
+            )
+
+        logger.info(f"[{channel['id']}] QC ulang APPROVED — video boleh lanjut.")
         return fixed_video, fixed_thumb
 
     except Exception as e:

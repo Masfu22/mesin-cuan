@@ -22,8 +22,8 @@ logger = get_logger("research_engine")
 PERPLEXITY_API_BASE = "https://api.perplexity.ai"
 PERPLEXITY_MODEL = os.environ.get("PERPLEXITY_MODEL", "perplexity/sonar")
 
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "https://ollama.com").rstrip("/")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gpt-oss:20b").strip()
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "").strip().rstrip("/") or "https://ollama.com"
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
 if OLLAMA_MODEL.endswith("-cloud"):
     OLLAMA_MODEL = OLLAMA_MODEL[:-6]
 

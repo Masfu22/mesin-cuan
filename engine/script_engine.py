@@ -790,8 +790,8 @@ def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
         for attempt in range(1, MAX_JSON_RETRY + 1):
             user_msg = user_message + _get_length_hint(profile)
             if attempt > 1:
-                user_msg += f"\\n\\n[ATTEMPT {attempt}] Output ONLY valid JSON, no markdown."
-            prompt = f"{system_prompt}\\n\\n{user_msg}"
+                user_msg += f"\n\n[ATTEMPT {attempt}] Output ONLY valid JSON, no markdown."
+            prompt = f"{system_prompt}\n\n{user_msg}"
             try:
                 resp = client.models.generate_content(model=model, contents=prompt)
                 raw = (getattr(resp, "text", None) or "").strip()

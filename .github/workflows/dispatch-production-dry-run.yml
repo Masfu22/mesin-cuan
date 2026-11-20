@@ -22,6 +22,7 @@ jobs:
       - name: Dispatch production pipeline in DRY RUN mode
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: Masfu22/mesin-cuan
         run: |
           gh workflow run .github/workflows/run-mesin-cuan.yml \
             --ref main \

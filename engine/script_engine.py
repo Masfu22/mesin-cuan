@@ -223,7 +223,7 @@ def _call_ai(system_prompt: str, user_message: str, profile: str = "shorts") -> 
         fallback_providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
     if os.getenv("OLLAMA_API_KEY", "").strip():
         fallback_providers.append(("Ollama Cloud", lambda: _call_ollama_cloud(system_prompt, user_message, profile)))
-    if os.getenv("GEMINI_API_KEY", "").strip():
+    if _gemini_api_keys():
         fallback_providers.append(("Gemini", lambda: _call_gemini(system_prompt, user_message, profile)))
     if os.getenv("ANTHROPIC_API_KEY", "").strip():
         fallback_providers.append(("Anthropic", lambda: _call_anthropic(system_prompt, user_message, profile)))
@@ -754,42 +754,66 @@ def _call_nvidia(system_prompt: str, user_message: str, profile: str) -> dict:
 
 # ─── Gemini ───────────────────────────────────────────────────────────────────
 
+def _gemini_api_keys() -> list:
+    """Load Gemini keys from individual GitHub Secrets and an optional CSV secret."""
+    names = ("GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3",
+             "GEMINI_API_KEY_4", "GEMINI_API_KEY_5", "GEMINI_API_KEY_6",
+             "GEMINI_API_KEY_7", "GEMINI_API_KEY_8", "GEMINI_API_KEY_9",
+             "GEMINI_API_KEY_10")
+    keys = []
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value and value not in keys:
+            keys.append(value)
+    for value in os.getenv("GEMINI_API_KEYS", "").split(","):
+        value = value.strip()
+        if value and value not in keys:
+            keys.append(value)
+    return keys
+
+
 def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
-    from google import genai
-    client = genai.Client(api_key=require_env("GEMINI_API_KEY"))
+    """Generate a script with Gemini, rotating through all configured API keys."""
+    try:
+        from google import genai
+    except ImportError as exc:
+        raise RuntimeError("google-genai belum terpasang; tambahkan google-genai ke requirements.txt") from exc
 
-    for attempt in range(1, MAX_JSON_RETRY + 1):
-        user_msg = user_message + _get_length_hint(profile)
-        if attempt > 1:
-            user_msg += f"\n\n[ATTEMPT {attempt}] Output ONLY valid JSON, no markdown."
+    keys = _gemini_api_keys()
+    if not keys:
+        raise RuntimeError("Tidak ada GEMINI_API_KEY yang dikonfigurasi")
 
-        prompt = f"{system_prompt}\n\n{user_msg}"
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    errors = []
+    for key_index, api_key in enumerate(keys, start=1):
+        client = genai.Client(api_key=api_key)
+        for attempt in range(1, MAX_JSON_RETRY + 1):
+            user_msg = user_message + _get_length_hint(profile)
+            if attempt > 1:
+                user_msg += f"\\n\\n[ATTEMPT {attempt}] Output ONLY valid JSON, no markdown."
+            prompt = f"{system_prompt}\\n\\n{user_msg}"
+            try:
+                resp = client.models.generate_content(model=model, contents=prompt)
+                raw = (getattr(resp, "text", None) or "").strip()
+                if not raw:
+                    raise ValueError("Gemini returned empty response")
+                result = _parse_json_response(raw, profile)
+                result["generator_model"] = model
+                result["generator_provider"] = "gemini"
+                logger.info(f"Gemini key slot {key_index} berhasil")
+                return result
+            except (json.JSONDecodeError, ValueError) as exc:
+                errors.append(f"key slot {key_index}, attempt {attempt}: {type(exc).__name__}")
+                logger.warning(f"Gemini key slot {key_index} JSON gagal pada percobaan {attempt}")
+                if attempt < MAX_JSON_RETRY:
+                    continue
+                break
+            except Exception as exc:
+                errors.append(f"key slot {key_index}: {type(exc).__name__}")
+                logger.warning(f"Gemini key slot {key_index} gagal ({type(exc).__name__}); mencoba key berikutnya")
+                break
 
-        try:
-            resp = client.models.generate_content(
-                model="gemini-1.5-flash",
-                contents=prompt,
-            )
-            if not resp.text:
-                raise ValueError("Gemini returned empty response")
-
-            return _parse_json_response(resp.text.strip(), profile)
-
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Gemini attempt {attempt}/{MAX_JSON_RETRY}: JSON parse gagal — {e}")
-            if attempt == MAX_JSON_RETRY:
-                raise
-
-        except Exception as e:
-            err_str = str(e)
-            if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
-                wait = 60 if attempt == 1 else 120
-                logger.warning(f"Gemini rate limit, tunggu {wait}s...")
-                time.sleep(wait)
-            else:
-                raise
-
-    raise RuntimeError("Gemini gagal setelah semua retry")
+    raise RuntimeError("Semua Gemini API key gagal: " + "; ".join(errors))
 
 
 # ─── Anthropic ────────────────────────────────────────────────────────────────

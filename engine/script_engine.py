@@ -227,6 +227,15 @@ def _call_ai(system_prompt: str, user_message: str, profile: str = "shorts") -> 
     if os.getenv("ANTHROPIC_API_KEY", "").strip():
         providers.append(("Anthropic", lambda: _call_anthropic(system_prompt, user_message, profile)))
 
+    # NVIDIA free endpoint hanya untuk pengujian/evaluasi eksplisit.
+    # Tidak diaktifkan pada workflow produksi karena ketentuan NVIDIA membatasi
+    # akses Developer Program gratis untuk prototyping dan testing.
+    if (
+        os.getenv("NVIDIA_ENABLE_FREE_FALLBACK", "").strip().lower() in {"1", "true", "yes"}
+        and os.getenv("NVIDIA_API_KEY", "").strip()
+    ):
+        providers.append(("NVIDIA NIM (evaluation)", lambda: _call_nvidia(system_prompt, user_message, profile)))
+
     if not providers:
         raise RuntimeError(
             "Tidak ada AI provider script yang aktif. Konfigurasikan Ollama, Groq, Gemini, atau Anthropic."
@@ -717,36 +726,86 @@ def _call_groq(system_prompt: str, user_message: str, profile: str) -> dict:
             raise  # Error non-JSON (rate limit, dll) langsung raise
 
 
-# ─── NVIDIA NIM ───────────────────────────────────────────────────────────────
+# ─── NVIDIA NIM (free developer endpoint: evaluation only) ────────────────────
 def _call_nvidia(system_prompt: str, user_message: str, profile: str) -> dict:
-    """Generate script melalui endpoint OpenAI-compatible NVIDIA NIM."""
+    """Call NVIDIA hosted NIM with bounded retries for free-tier throttling."""
     api_key = require_env("NVIDIA_API_KEY")
-    base_url = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1").strip().rstrip("/")
-    model = os.getenv("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct").strip()
+    base_url = os.getenv(
+        "NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"
+    ).strip().rstrip("/")
+    model = os.getenv(
+        "NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b"
+    ).strip()
     max_tokens = SCRIPT_MAX_TOKENS_LONGFORM if profile == "long_form" else SCRIPT_MAX_TOKENS_SHORTS
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": system_prompt + "\n\nReturn only a valid JSON object."},
+            {
+                "role": "system",
+                "content": system_prompt + "\\n\\nReturn only a valid JSON object. No markdown.",
+            },
             {"role": "user", "content": user_message + _get_length_hint(profile)},
         ],
         "temperature": 0.7,
         "max_tokens": max_tokens,
         "stream": False,
     }
-    response = _post_json_no_proxy(
-        f"{base_url}/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        payload=payload,
-        timeout=300,
-    )
-    response.raise_for_status()
-    raw = response.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-    if not raw:
-        raise RuntimeError("NVIDIA NIM mengembalikan respons kosong")
-    result = _parse_json_response(raw, profile)
-    result["generator_model"] = model
-    return result
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    last_error = None
+    for attempt in range(1, 4):
+        response = _post_json_no_proxy(
+            f"{base_url}/chat/completions",
+            headers=headers,
+            payload=payload,
+            timeout=(15, 240),
+        )
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After", "")
+            try:
+                wait_seconds = min(120, max(5, int(float(retry_after)))) if retry_after else 30 * attempt
+            except (TypeError, ValueError):
+                wait_seconds = 30 * attempt
+            last_error = f"HTTP 429 rate limit; retry dalam {wait_seconds}s"
+            if attempt < 3:
+                logger.warning(f"NVIDIA NIM free-tier dibatasi (429); {last_error}.")
+                time.sleep(wait_seconds)
+                continue
+            raise RuntimeError(f"NVIDIA NIM free-tier tetap terkena rate limit setelah 3 percobaan: {last_error}")
+
+        if response.status_code in (500, 502, 503, 504):
+            last_error = f"HTTP {response.status_code}"
+            if attempt < 3:
+                wait_seconds = 5 * attempt
+                logger.warning(f"NVIDIA NIM sementara bermasalah ({last_error}); retry {attempt}/3 dalam {wait_seconds}s.")
+                time.sleep(wait_seconds)
+                continue
+
+        if response.status_code == 410:
+            raise RuntimeError(
+                "NVIDIA NIM mengembalikan HTTP 410: model/endpoint tidak lagi tersedia untuk akun ini. "
+                "Periksa model aktif di build.nvidia.com dan ubah NVIDIA_MODEL; tidak dilakukan retry."
+            )
+
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as exc:
+            status = response.status_code
+            detail = response.text[:400].replace(api_key, "[REDACTED]")
+            raise RuntimeError(f"NVIDIA NIM HTTP {status}: {detail}") from exc
+
+        raw = response.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        if not raw:
+            raise RuntimeError("NVIDIA NIM mengembalikan respons kosong.")
+        result = _parse_json_response(raw, profile)
+        result["generator_model"] = model
+        return result
+
+    raise RuntimeError(f"NVIDIA NIM gagal setelah retry terbatas: {last_error}")
 
 
 # ─── Gemini ───────────────────────────────────────────────────────────────────

@@ -31,7 +31,7 @@ jobs:
 
       - name: Compile Python modules
         run: |
-          python -m py_compile engine/script_engine.py engine/utils.py engine/script_quality_scorer.py
+          python -m compileall -q engine main.py
 
       - name: Verify original provider order and safe generation path
         run: |
@@ -67,5 +67,16 @@ jobs:
           nvidia_test = Path(".github/workflows/test-nvidia-free.yml").read_text(encoding="utf-8")
           assert "workflow_dispatch:" in nvidia_test, "NVIDIA connection test must be manual only"
           assert "NVIDIA_API_KEY" in nvidia_test and "chat/completions" in nvidia_test
-          print("PASS: Python syntax, original provider order, NVIDIA evaluation gate, and preserved integration variables.")
+          research = Path("engine/research_engine.py").read_text(encoding="utf-8")
+          assert 'OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "")' in research
+          assert '"/api/chat"' in research
+          assert 'OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL"' in research
+          assert "http://localhost:11434" not in research, "Cloud workflow must not silently call localhost"
+
+          assert "default: true" in workflow, "Production workflow must default to dry-run"
+          script_test = Path(".github/workflows/test-script-generation-only.yml").read_text(encoding="utf-8")
+          assert "--script-only" in script_test, "Script-only test must not run the render/upload pipeline"
+          assert "upload-artifact@v4" in script_test, "Script-only output should be retained as an artifact"
+
+          print("PASS: Python syntax, provider order, Ollama Cloud endpoint, dry-run safety, script-only test, and preserved integration variables.")
           PY

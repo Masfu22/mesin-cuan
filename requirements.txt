@@ -5,7 +5,7 @@ APScheduler>=3.10.4
 
 # ─── AI — Script Generation ───────────────────────────────────────────────────
 groq>=1.1.0                          # primary LLM (DeepSeek via Ollama pakai requests biasa)
-google-genai>=0.7.0                       # Gemini SDK baru (menggantikan google-generativeai yang deprecated)
+google-genai>=2.3.0,<4                  # Interactions API resmi; SDK Google GenAI modern
 anthropic>=0.86.0                    # Claude fallback (last resort)
 openai>=1.68.0                       # NVIDIA NIM OpenAI-compatible streaming client
 

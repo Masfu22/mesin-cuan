@@ -156,12 +156,36 @@ def generate(topic_data: dict, channel: dict, profile: str = "shorts") -> dict:
         user_message = f"{prefix}: {topic}{part_instruction}"
 
 
-    # ── Dual Parallel Generation + Cross-Provider Scoring ──────────────────
-    result = _generate_and_pick_best(system_prompt, user_message, profile, ch_id, channel=channel)
-    if result is None:
-        # Fallback: sequential waterfall (existing behavior, tidak ada perubahan)
-        logger.info(f"[{ch_id}] Parallel scorer tidak menghasilkan winner → fallback ke sequential")
+    # ── Primary provider waterfall: NVIDIA → Gemini → Groq → extras ───────
+    # Preserve the original dual-provider cross-scoring path for configurations
+    # that do not define any of the preferred direct providers.
+    preferred_provider_ready = bool(
+        os.getenv("NVIDIA_API_KEY", "").strip()
+        or _gemini_api_keys()
+        or os.getenv("GROQ_API_KEY", "").strip()
+        or os.getenv("ANTHROPIC_API_KEY", "").strip()
+    )
+
+    if preferred_provider_ready:
+        logger.info(
+            f"[{ch_id}] Menggunakan provider waterfall prioritas: "
+            "NVIDIA → Gemini → Groq → Anthropic → Provider-A/B"
+        )
         result = _call_ai(system_prompt, user_message, profile=profile)
+    else:
+        logger.info(
+            f"[{ch_id}] Provider prioritas tidak dikonfigurasi; "
+            "menggunakan dual parallel generation + cross-scoring bawaan"
+        )
+        result = _generate_and_pick_best(
+            system_prompt, user_message, profile, ch_id, channel=channel
+        )
+        if result is None:
+            logger.info(
+                f"[{ch_id}] Parallel scorer tidak menghasilkan winner "
+                "→ fallback ke sequential provider waterfall"
+            )
+            result = _call_ai(system_prompt, user_message, profile=profile)
     result["topic"]              = topic
     result["profile"]            = profile
     result["is_viral_iteration"] = is_viral_iteration

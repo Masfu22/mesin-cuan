@@ -1,0 +1,213 @@
+name: Mesin Cuan - Original Algojogacor (Ubuntu Linux)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Pilih mode eksekusi"
+        required: true
+        type: choice
+        options:
+          - preview
+          - script-only
+          - dry-run
+          - production
+        default: preview
+      channel:
+        description: "Channel ID, atau all untuk semua channel aktif"
+        required: true
+        default: "ch_id_horror"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mesin-cuan-${{ github.workflow }}-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  run-mesin-cuan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      PYTHONUNBUFFERED: "1"
+      TZ: Asia/Jakarta
+      NO_COLOR: "1"
+      TTS_MODE: edge
+
+      # Original Algojogacor provider configuration
+      PROVIDER_A_BASE_URL: https://integrate.api.nvidia.com/v1
+      PROVIDER_A_API_KEY: ${{ secrets.PROVIDER_A_API_KEY }}
+      PROVIDER_A_MODEL: mistralai/mistral-large-3-675b-instruct-2512
+      PROVIDER_A_MODEL_CANDIDATES: mistralai/mistral-large-3-675b-instruct-2512
+      PROVIDER_B_BASE_URL: https://api.deepseek.com/v1
+      PROVIDER_B_API_KEY: ${{ secrets.PROVIDER_B_API_KEY }}
+      PROVIDER_B_MODEL: deepseek-v4-pro
+      PROVIDER_B_MODEL_CANDIDATES: deepseek-v4-pro
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GROQ_MODEL: llama3-70b-8192
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+
+      # Required / optional original integrations
+      YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+      PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+      PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+      COVERR_API_KEY: ${{ secrets.COVERR_API_KEY }}
+      COVERR_APP_ID: ${{ secrets.COVERR_APP_ID }}
+      FREESOUND_API_KEY: ${{ secrets.FREESOUND_API_KEY }}
+      PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+      PERPLEXITY_MODEL: ${{ vars.PERPLEXITY_MODEL }}
+      ASSEMBLYAI_API_KEY: ${{ secrets.ASSEMBLYAI_API_KEY }}
+      ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      # Google OAuth client values; the per-channel OAuth token JSON is written below
+      GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+      GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+      GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+
+      # Store each OAuth token JSON as a multiline GitHub Secret
+      TOKEN_CH_ID_HORROR_JSON: ${{ secrets.TOKEN_CH_ID_HORROR_JSON }}
+      TOKEN_CH_ID_PSYCH_JSON: ${{ secrets.TOKEN_CH_ID_PSYCH_JSON }}
+      TOKEN_CH_EN_HORROR_JSON: ${{ secrets.TOKEN_CH_EN_HORROR_JSON }}
+      TOKEN_CH_EN_PSYCH_JSON: ${{ secrets.TOKEN_CH_EN_PSYCH_JSON }}
+
+      RUN_MODE: ${{ inputs.mode }}
+      CHANNEL_ID: ${{ inputs.channel }}
+
+    steps:
+      - name: Checkout original repository code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg libsndfile1
+          ffmpeg -version | head -n 1
+          python --version
+
+      - name: Install original Python requirements
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -r requirements.txt
+
+      - name: Restore saved pipeline data
+        uses: actions/cache@v4
+        with:
+          path: data/
+          key: mesin-cuan-data-${{ github.run_id }}
+          restore-keys: |
+            mesin-cuan-data-
+
+      - name: Prepare original assets and OAuth token files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/setup_assets.py
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          token_map = {
+              "TOKEN_CH_ID_HORROR_JSON": "config/credentials/ch_id_horror_v2.json",
+              "TOKEN_CH_ID_PSYCH_JSON": "config/credentials/ch_id_psych_v2.json",
+              "TOKEN_CH_EN_HORROR_JSON": "config/credentials/ch_en_horror_v2.json",
+              "TOKEN_CH_EN_PSYCH_JSON": "config/credentials/ch_en_psych_v2.json",
+          }
+
+          for env_name, file_name in token_map.items():
+              raw = os.environ.get(env_name, "").strip()
+              if not raw:
+                  continue
+              try:
+                  token = json.loads(raw)
+              except json.JSONDecodeError as exc:
+                  raise SystemExit(f"{env_name} bukan JSON yang valid: {exc}")
+              if not token.get("refresh_token"):
+                  raise SystemExit(f"{env_name} tidak memiliki refresh_token; buat OAuth offline token terlebih dahulu.")
+              path = Path(file_name)
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(json.dumps(token, ensure_ascii=False), encoding="utf-8")
+              print(f"OAuth token siap: {file_name}")
+
+          print("Persiapan konfigurasi selesai. Nilai rahasia tidak dicetak.")
+          PY
+
+      - name: Validate production OAuth tokens
+        if: inputs.mode == 'production'
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          selected = __import__("os").environ.get("CHANNEL_ID", "all").strip()
+          settings = json.loads(Path("config/settings.json").read_text(encoding="utf-8"))
+          channels = [c for c in settings.get("channels", []) if c.get("active")]
+          if selected.lower() != "all":
+              channels = [c for c in channels if c.get("id") == selected]
+          if not channels:
+              raise SystemExit(f"Channel aktif tidak ditemukan: {selected}")
+          missing = []
+          for channel in channels:
+              token_path = channel.get("credentials_file", "").replace("_token.json", "_v2.json")
+              if not token_path or not Path(token_path).is_file():
+                  missing.append(f"{channel.get('id')}: {token_path}")
+          if missing:
+              raise SystemExit("OAuth token belum lengkap:\n" + "\n".join(missing))
+          print("Token OAuth untuk channel yang dipilih tersedia.")
+          PY
+
+      - name: Execute original Mesin Cuan pipeline
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ -n "$CHANNEL_ID" && "$CHANNEL_ID" != "all" ]]; then
+            args+=(--channel "$CHANNEL_ID")
+          fi
+
+          case "$RUN_MODE" in
+            preview)
+              python main.py --preview "${args[@]}"
+              ;;
+            script-only)
+              python main.py --script-only "${args[@]}"
+              ;;
+            dry-run)
+              python main.py --dry-run "${args[@]}"
+              ;;
+            production)
+              echo "Mode produksi: pipeline asli akan mengirim hasil render ke Google Drive queue."
+              python main.py "${args[@]}"
+              ;;
+            *)
+              echo "Mode tidak dikenal: $RUN_MODE"
+              exit 2
+              ;;
+          esac
+
+      - name: Save scripts and rendered outputs for phone access
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mesin-cuan-output-${{ github.run_number }}
+          path: |
+            data/
+            output/videos/
+          if-no-files-found: ignore
+          retention-days: 7

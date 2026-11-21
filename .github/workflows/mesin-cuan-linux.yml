@@ -112,12 +112,17 @@ jobs:
           restore-keys: |
             mesin-cuan-data-
 
-      - name: Prepare original assets and OAuth token files
+      - name: Prepare original audio assets
         shell: bash
         run: |
           set -euo pipefail
           python tools/setup_assets.py
+          python tools/setup_assets.py --verify
 
+      - name: Prepare Google OAuth token files
+        shell: bash
+        run: |
+          set -euo pipefail
           python - <<'PY'
           import json
           import os
@@ -145,7 +150,7 @@ jobs:
               path.write_text(json.dumps(token, ensure_ascii=False), encoding="utf-8")
               print(f"OAuth token siap: {file_name}")
 
-          print("Persiapan konfigurasi selesai. Nilai rahasia tidak dicetak.")
+          print("Persiapan OAuth selesai. Nilai rahasia tidak dicetak.")
           PY
 
       - name: Validate production OAuth tokens

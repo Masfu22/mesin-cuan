@@ -1,0 +1,198 @@
+name: Mesin Cuan - AI Provider Smoke Test
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "engine/script_engine.py"
+      - "engine/utils.py"
+      - "requirements.txt"
+      - ".github/workflows/provider-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  providers:
+    name: Test API connectivity (no video upload)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+      NVIDIA_BASE_URL: ${{ secrets.NVIDIA_BASE_URL }}
+      NVIDIA_MODEL: ${{ secrets.NVIDIA_MODEL }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+      GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+      GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+      GEMINI_API_KEY_5: ${{ secrets.GEMINI_API_KEY_5 }}
+      GEMINI_API_KEY_6: ${{ secrets.GEMINI_API_KEY_6 }}
+      GEMINI_API_KEY_7: ${{ secrets.GEMINI_API_KEY_7 }}
+      GEMINI_API_KEY_8: ${{ secrets.GEMINI_API_KEY_8 }}
+      GEMINI_API_KEY_9: ${{ secrets.GEMINI_API_KEY_9 }}
+      GEMINI_API_KEY_10: ${{ secrets.GEMINI_API_KEY_10 }}
+      GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+      GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+      OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
+      OLLAMA_MODEL: ${{ secrets.OLLAMA_MODEL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install only API client SDKs
+        run: |
+          python -m pip install --upgrade pip
+          pip install "openai>=1.68.0" "google-genai>=0.7.0" "groq>=1.1.0"
+
+      - name: Test NVIDIA, Gemini key pool, Ollama Cloud, and optional Groq
+        run: |
+          python - <<'PY'
+          import json, os, sys, urllib.request
+          outcomes = []
+
+          def report(name, ok, detail):
+              outcomes.append((name, ok))
+              print(("PASS" if ok else "FAIL") + " | " + name + " | " + detail)
+
+          # NVIDIA primary - streaming request used by the application.
+          key = os.getenv("NVIDIA_API_KEY", "").strip()
+          if not key:
+              report("NVIDIA", False, "NVIDIA_API_KEY missing")
+          else:
+              try:
+                  from openai import OpenAI
+                  model = os.getenv("NVIDIA_MODEL", "").strip() or "nvidia/nemotron-3.5-super-vl-120b-a12b"
+                  client = OpenAI(
+                      base_url=os.getenv("NVIDIA_BASE_URL", "").strip() or "https://integrate.api.nvidia.com/v1",
+                      api_key=key, timeout=180.0, max_retries=1,
+                  )
+                  stream = client.chat.completions.create(
+                      model=model,
+                      messages=[{"role":"user","content":"Reply exactly NVIDIA_API_OK"}],
+                      max_tokens=256, temperature=0.2, stream=True,
+                  )
+                  answer = "".join(
+                      getattr(chunk.choices[0].delta, "content", "") or ""
+                      for chunk in stream if chunk.choices
+                  ).strip()
+                  if not answer:
+                      raise RuntimeError("empty streaming response")
+                  report("NVIDIA", True, "authenticated; streaming response received; model=" + model)
+              except Exception as exc:
+                  report("NVIDIA", False, type(exc).__name__ + ": " + str(exc)[:300])
+
+          # Gemini: verify each configured key, then perform one generation with the first valid key.
+          keys = []
+          for name in ["GEMINI_API_KEY"] + [f"GEMINI_API_KEY_{i}" for i in range(2, 11)]:
+              value = os.getenv(name, "").strip()
+              if value and value not in keys:
+                  keys.append(value)
+          for value in os.getenv("GEMINI_API_KEYS", "").split(","):
+              value = value.strip()
+              if value and value not in keys:
+                  keys.append(value)
+          if not keys:
+              report("Gemini", False, "no Gemini keys configured")
+          else:
+              try:
+                  from google import genai
+                  valid = []
+                  for index, api_key in enumerate(keys, 1):
+                      try:
+                          client = genai.Client(api_key=api_key)
+                          list(client.models.list())
+                          valid.append((index, client))
+                      except Exception as exc:
+                          print(f"INFO | Gemini key slot {index} rejected ({type(exc).__name__}); trying next key")
+                  if not valid:
+                      raise RuntimeError("all Gemini keys failed authentication")
+                  model_names = []
+                  configured = os.getenv("GEMINI_MODEL", "").strip()
+                  if configured:
+                      model_names.append(configured)
+                  model_names.extend(["gemini-3.8-flash", "gemini-3.5-flash-lite"])
+                  generated = False
+                  last_error = None
+                  for model in dict.fromkeys(model_names):
+                      for index, client in valid:
+                          try:
+                              response = client.models.generate_content(
+                                  model=model, contents='Return exactly {"status":"ok"}'
+                              )
+                              if not getattr(response, "text", "").strip():
+                                  raise RuntimeError("empty generation response")
+                              report("Gemini", True, f"{len(keys)} configured key(s); {len(valid)} authenticated; generation passed on key slot {index}, model={model}")
+                              generated = True
+                              break
+                          except Exception as exc:
+                              last_error = exc
+                      if generated:
+                          break
+                  if not generated:
+                      raise RuntimeError("all model/key generation attempts failed: " + str(last_error)[:250])
+              except Exception as exc:
+                  report("Gemini", False, type(exc).__name__ + ": " + str(exc)[:300])
+
+          # Ollama Cloud: same /api/chat endpoint as the user's prior connection test.
+          ollama_key = os.getenv("OLLAMA_API_KEY", "").strip()
+          if not ollama_key:
+              report("Ollama Cloud", False, "OLLAMA_API_KEY missing")
+          else:
+              try:
+                  base = (os.getenv("OLLAMA_BASE_URL", "").strip() or "https://ollama.com").rstrip("/")
+                  model = os.getenv("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
+                  payload = {
+                      "model": model,
+                      "messages": [{"role":"user","content":"Reply exactly OLLAMA_API_OK"}],
+                      "stream": False,
+                  }
+                  request = urllib.request.Request(
+                      base + "/api/chat",
+                      data=json.dumps(payload).encode(),
+                      headers={"Authorization":"Bearer " + ollama_key,"Content-Type":"application/json"},
+                      method="POST",
+                  )
+                  with urllib.request.urlopen(request, timeout=240) as response:
+                      body = json.loads(response.read().decode())
+                  answer = body.get("message", {}).get("content", "").strip()
+                  if not answer:
+                      raise RuntimeError("empty chat response")
+                  report("Ollama Cloud", True, "authenticated; chat response received; model=" + model)
+              except Exception as exc:
+                  report("Ollama Cloud", False, type(exc).__name__ + ": " + str(exc)[:300])
+
+          # Groq was previously observed as empty; optional and explicitly reported as SKIP.
+          groq_key = os.getenv("GROQ_API_KEY", "").strip()
+          if not groq_key:
+              print("SKIP | Groq | GROQ_API_KEY was previously observed empty")
+          else:
+              try:
+                  from groq import Groq
+                  response = Groq(api_key=groq_key).chat.completions.create(
+                      model="llama-3.3-70b-versatile",
+                      messages=[{"role":"user","content":"Reply exactly GROQ_API_OK"}],
+                      max_tokens=32,
+                  )
+                  if not response.choices[0].message.content:
+                      raise RuntimeError("empty response")
+                  report("Groq", True, "chat completion passed")
+              except Exception as exc:
+                  report("Groq", False, type(exc).__name__ + ": " + str(exc)[:300])
+
+          required = {"NVIDIA", "Gemini", "Ollama Cloud"}
+          failed = [name for name, ok in outcomes if name in required and not ok]
+          if failed:
+              print("Required provider test failed: " + ", ".join(failed))
+              sys.exit(1)
+          print("PASS | No video render, Google Drive upload, or YouTube upload was performed.")
+          PY

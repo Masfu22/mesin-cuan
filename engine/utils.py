@@ -10,6 +10,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+def get_gemini_api_keys() -> list[str]:
+    """Collect unique Gemini API keys from numbered and comma-separated secrets."""
+    names = ["GEMINI_API_KEY"] + [f"GEMINI_API_KEY_{i}" for i in range(2, 11)]
+    keys = []
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value and value not in keys:
+            keys.append(value)
+    for value in os.getenv("GEMINI_API_KEYS", "").split(","):
+        value = value.strip()
+        if value and value not in keys:
+            keys.append(value)
+    return keys
+
+
 ANSI_RESET = "\033[0m"
 ANSI_BOLD = "\033[1m"
 ANSI_DIM = "\033[2m"

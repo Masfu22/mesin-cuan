@@ -30,6 +30,16 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Validate Telegram notification secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]]; then
+            echo "::error::Isi GitHub Secrets TELEGRAM_BOT_TOKEN dan TELEGRAM_CHAT_ID terlebih dahulu."
+            exit 1
+          fi
+          echo "Telegram notification secrets terdeteksi (nilai tidak ditampilkan)."
+
       - name: Restore alert deduplication state
         uses: actions/cache/restore@v4
         with:

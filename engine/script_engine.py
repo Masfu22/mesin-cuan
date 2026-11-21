@@ -26,7 +26,7 @@ import concurrent.futures
 from copy import deepcopy
 from typing import Callable
 import requests
-from engine.utils import get_logger, require_env, load_prompt, timestamp, save_json, channel_data_path, get_ollama_model, get_provider_config, get_provider_model
+from engine.utils import get_logger, require_env, load_prompt, timestamp, save_json, channel_data_path, get_ollama_model, get_provider_config, get_provider_model, get_gemini_api_keys
 
 # ── BARU: Imports untuk fitur Hook & Retention ─────────────────────────────────
 from engine.hook_engine import inject_hook
@@ -205,20 +205,28 @@ def review_hook_only(script_data: dict, channel: dict, profile: str = "shorts") 
 
 
 def _call_ai(system_prompt: str, user_message: str, profile: str = "shorts") -> dict:
-    # Provider-A is the preferred writer. Provider-B remains a generation
-    # fallback for resilience, while its primary role is evaluation.
+    # Urutan provider utama sesuai konfigurasi pengguna:
+    # NVIDIA → Gemini → Groq → provider tambahan.
+    # Provider yang tidak memiliki API key/config akan dilewati otomatis.
+    providers = []
+    if os.getenv("NVIDIA_API_KEY", "").strip():
+        providers.append(("NVIDIA NIM", lambda: _call_nvidia(system_prompt, user_message, profile)))
+    if _gemini_api_keys():
+        providers.append(("Gemini", lambda: _call_gemini(system_prompt, user_message, profile)))
+    if os.getenv("GROQ_API_KEY", "").strip():
+        providers.append(("Groq", lambda: _call_groq(system_prompt, user_message, profile)))
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        providers.append(("Anthropic", lambda: _call_anthropic(system_prompt, user_message, profile)))
+
+    # Provider-A/B tetap tersedia sebagai fallback tambahan, bukan prioritas.
     cfg_a = get_provider_config("a")
     cfg_b = get_provider_config("b")
-    primary_providers = []
     if cfg_a["base_url"] and cfg_a["api_key"]:
-        primary_providers.append(("Provider-A", lambda: _call_provider_a(system_prompt, user_message, profile)))
+        providers.append(("Provider-A", lambda: _call_provider_a(system_prompt, user_message, profile)))
     if cfg_b["base_url"] and cfg_b["api_key"]:
-        primary_providers.append(("Provider-B", lambda: _call_provider_b(system_prompt, user_message, profile)))
-
-    # Groq sebagai last-resort fallback saja
-    providers = primary_providers + [
-        ("Groq", lambda: _call_groq(system_prompt, user_message, profile)),
-    ]
+        providers.append(("Provider-B", lambda: _call_provider_b(system_prompt, user_message, profile)))
+    if not providers:
+        raise RuntimeError("Tidak ada AI provider aktif. Isi NVIDIA_API_KEY, GEMINI_API_KEY, GROQ_API_KEY, atau konfigurasi provider tambahan.")
 
     last_error = None
     for name, fn in providers:
@@ -635,45 +643,157 @@ def _call_groq(system_prompt: str, user_message: str, profile: str) -> dict:
             raise  # Error non-JSON (rate limit, dll) langsung raise
 
 
+# ─── NVIDIA + Gemini multi-key fallback ─────────────────────────────────────
+
+def _call_nvidia(system_prompt: str, user_message: str, profile: str) -> dict:
+    """
+    Generate script via the SAME NVIDIA NIM streaming request proven by
+    .github/workflows/test-nvidia-api.yml. Keep script JSON prompt/parser intact.
+    """
+    from openai import OpenAI
+
+    api_key = require_env("NVIDIA_API_KEY")
+    # Match the successful test workflow exactly; blank GitHub Secrets must not
+    # override the working NVIDIA endpoint/model defaults.
+    base_url = (os.getenv("NVIDIA_BASE_URL", "").strip() or "https://integrate.api.nvidia.com/v1").rstrip("/")
+    model = os.getenv("NVIDIA_MODEL", "").strip() or "nvidia/nemotron-3.5-super-vl-120b-a12b"
+
+    client = OpenAI(
+        base_url=base_url,
+        api_key=api_key,
+        timeout=180.0,
+        max_retries=1,
+    )
+    stream = client.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": system_prompt + "\n\nReturn ONLY one valid JSON object. Do not use Markdown fences.",
+            },
+            {
+                "role": "user",
+                "content": user_message + _get_length_hint(profile),
+            },
+        ],
+        temperature=1.0,
+        top_p=0.95,
+        max_tokens=16384,
+        extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+        stream=True,
+    )
+
+    # Match the successful test: collect streamed delta.content chunks.
+    parts = []
+    finish_reason = None
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        choice = chunk.choices[0]
+        if choice.finish_reason:
+            finish_reason = choice.finish_reason
+        content = getattr(choice.delta, "content", None)
+        if isinstance(content, str):
+            parts.append(content)
+
+    raw = "".join(parts).strip()
+    if finish_reason == "length":
+        raise RuntimeError("NVIDIA NIM response terpotong (finish_reason=length).")
+    if not raw:
+        raise RuntimeError(
+            f"NVIDIA NIM tidak mengirim delta.content (finish_reason={finish_reason}); "
+            "periksa model/endpoint atau lanjutkan ke provider fallback."
+        )
+
+    result = _parse_json_response(raw, profile)
+    result["generator_model"] = model
+    return result
+
 # ─── Gemini ───────────────────────────────────────────────────────────────────
 
+def _gemini_api_keys() -> list[str]:
+    """Backward-compatible wrapper around the shared Gemini key collector."""
+    return get_gemini_api_keys()
+
+
+def _gemini_model_candidates() -> list[str]:
+    """Model Gemini berurutan: override opsional, lalu model gratis resmi."""
+    configured = os.getenv("GEMINI_MODEL", "").strip()
+    candidates = [configured] if configured else []
+    candidates.extend(["gemini-3.8-flash", "gemini-3.5-flash-lite"])
+    return list(dict.fromkeys(model for model in candidates if model))
+
+
 def _call_gemini(system_prompt: str, user_message: str, profile: str) -> dict:
+    """Generate via Gemini Interactions API; rotate keys and model fallback."""
     from google import genai
-    client = genai.Client(api_key=require_env("GEMINI_API_KEY"))
+    from google.genai import types
 
-    for attempt in range(1, MAX_JSON_RETRY + 1):
-        user_msg = user_message + _get_length_hint(profile)
-        if attempt > 1:
-            user_msg += f"\n\n[ATTEMPT {attempt}] Output ONLY valid JSON, no markdown."
+    keys = _gemini_api_keys()
+    if not keys:
+        raise RuntimeError("Tidak ada GEMINI_API_KEY yang dikonfigurasi")
 
-        prompt = f"{system_prompt}\n\n{user_msg}"
+    models = _gemini_model_candidates()
+    max_attempts = MAX_JSON_RETRY
+    errors = []
+    total_deadline = time.monotonic() + 180
+    prompt = (
+        system_prompt
+        + "\n\n"
+        + user_message
+        + _get_length_hint(profile)
+        + "\n\nReturn ONLY one valid JSON object. Do not use Markdown fences."
+    )
 
-        try:
-            resp = client.models.generate_content(
-                model="gemini-1.5-flash",
-                contents=prompt,
-            )
-            if not resp.text:
-                raise ValueError("Gemini returned empty response")
+    for model in models:
+        for key_index, api_key in enumerate(keys, start=1):
+            if time.monotonic() >= total_deadline:
+                raise RuntimeError("Batas waktu total Gemini script 180 detik tercapai")
+            remaining_ms = max(1000, min(45000, int((total_deadline - time.monotonic()) * 1000)))
+            try:
+                client = genai.Client(
+                    api_key=api_key,
+                    http_options=types.HttpOptions(timeout=remaining_ms),
+                )
+            except Exception as exc:
+                errors.append(f"model {model}/key {key_index}: client init {type(exc).__name__}")
+                logger.warning(
+                    f"Gemini client key slot {key_index} gagal dibuat ({type(exc).__name__}); mencoba key berikutnya"
+                )
+                continue
 
-            return _parse_json_response(resp.text.strip(), profile)
+            for attempt in range(1, max_attempts + 1):
+                if time.monotonic() >= total_deadline:
+                    break
+                try:
+                    response = client.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(temperature=0.7),
+                    )
+                    raw = getattr(response, "text", None)
+                    if not isinstance(raw, str) or not raw.strip():
+                        raise ValueError("Gemini generate_content returned empty text")
+                    result = _parse_json_response(raw.strip(), profile)
+                    result["generator_model"] = model
+                    logger.info(f"Gemini model={model}, key slot {key_index} berhasil")
+                    return result
+                except (json.JSONDecodeError, ValueError) as exc:
+                    errors.append(f"model {model}/key {key_index}: {type(exc).__name__}")
+                    logger.warning(
+                        f"Gemini model={model}, key slot {key_index}, attempt {attempt}/{max_attempts}: {exc}"
+                    )
+                    if attempt == max_attempts:
+                        break
+                except Exception as exc:
+                    errors.append(f"model {model}/key {key_index}: {type(exc).__name__}")
+                    logger.warning(
+                        f"Gemini model={model}, key slot {key_index} gagal ({type(exc).__name__})"
+                    )
+                    # Coba key lain; jika semua key gagal, lanjut ke model fallback.
+                    break
 
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Gemini attempt {attempt}/{MAX_JSON_RETRY}: JSON parse gagal — {e}")
-            if attempt == MAX_JSON_RETRY:
-                raise
-
-        except Exception as e:
-            err_str = str(e)
-            if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
-                wait = 60 if attempt == 1 else 120
-                logger.warning(f"Gemini rate limit, tunggu {wait}s...")
-                time.sleep(wait)
-            else:
-                raise
-
-    raise RuntimeError("Gemini gagal setelah semua retry")
-
+    raise RuntimeError("Semua kombinasi model/API key Gemini gagal: " + "; ".join(errors))
 
 # ─── Anthropic ────────────────────────────────────────────────────────────────
 

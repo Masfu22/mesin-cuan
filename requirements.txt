@@ -4,7 +4,8 @@ requests>=2.32.0
 APScheduler>=3.10.4
 
 # ─── AI — Script Generation ───────────────────────────────────────────────────
-groq>=1.1.0                          # primary LLM (DeepSeek via Ollama pakai requests biasa)
+groq>=1.1.0
+openai>=1.68.0                 # NVIDIA NIM OpenAI-compatible client                          # primary LLM (DeepSeek via Ollama pakai requests biasa)
 google-genai>=0.7.0                       # Gemini SDK baru (menggantikan google-generativeai yang deprecated)
 anthropic>=0.86.0                    # Claude fallback (last resort)
 

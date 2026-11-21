@@ -14,6 +14,8 @@ import argparse
 import logging
 import urllib.request
 import urllib.error
+import subprocess
+import wave
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -132,26 +134,36 @@ def download_all_sfx(force: bool = False) -> dict[str, bool]:
 
 
 def _create_silent_placeholder(path: str, fname: str):
-    """Buat file placeholder minimal agar engine tidak crash."""
-    # Minimal MP3 header (silent ~0.1s) — 113 bytes ID3 + silent frame
-    # Ini placeholder valid agar ffmpeg tidak error saat load.
-    # Source: minimal mp3 silent frame spec.
-    if fname.endswith(".wav"):
-        # Minimal WAV header (44 bytes, 1 ch, 16-bit, 44100Hz, 0 samples)
-        wav_header = (
-            b"RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00"
-            b"\x01\x00\x01\x00\x44\xac\x00\x00\x88X\x01\x00"
-            b"\x02\x00\x10\x00data\x00\x00\x00\x00"
+    """Buat audio hening yang valid; gunakan ffmpeg bila tersedia."""
+    codec = "pcm_s16le" if fname.lower().endswith(".wav") else "libmp3lame"
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+                "-t", "0.75", "-c:a", codec, path,
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=20,
         )
-        with open(path, "wb") as f:
-            f.write(wav_header)
+        if os.path.getsize(path) >= 1024:
+            return
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        pass
+
+    # Fallback tanpa ffmpeg: WAV PCM valid; MP3 memakai frame senyap.
+    if fname.lower().endswith(".wav"):
+        with wave.open(path, "wb") as wav_file:
+            wav_file.setnchannels(2)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(44100)
+            wav_file.writeframes(b"\x00\x00\x00\x00" * 4410)
     else:
-        # Minimal silent MP3 (ID3v2 + 1 silent frame)
         silent_mp3 = (
-            b"\xff\xfb\x90\x00" +  # MPEG1 Layer3 frame header (silent)
-            b"\x00" * 413 +        # Frame data (silent)
-            b"\xff\xfb\x90\x00" +
-            b"\x00" * 413
+            b"\xff\xfb\x90\x00" + b"\x00" * 413 +
+            b"\xff\xfb\x90\x00" + b"\x00" * 413
         )
         with open(path, "wb") as f:
             f.write(silent_mp3)
@@ -204,4 +216,8 @@ if __name__ == "__main__":
     logger.info(f"Done. ✓ {n_ok} berhasil | ✗ {n_fail} gagal (placeholder dibuat)")
 
     if n_fail > 0:
-        sys.exit(1)
+        logger.warning(
+            "Sebagian SFX memakai placeholder hening. Pipeline tetap dilanjutkan; "
+            "gunakan aset audio berlisensi untuk efek suara asli."
+        )
+    sys.exit(0)

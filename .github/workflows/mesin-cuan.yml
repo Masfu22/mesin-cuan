@@ -1,6 +1,15 @@
 name: Mesin Cuan - GitHub Actions
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "main.py"
+      - "engine/**"
+      - "requirements.txt"
+      - "config/*.json"
+      - ".github/workflows/mesin-cuan.yml"
   workflow_dispatch:
     inputs:
       mode:
@@ -51,7 +60,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Static validation (no API calls or production)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate workflow YAML, JSON config, and Python syntax
+        run: |
+          python -m pip install --disable-pip-version-check pyyaml
+          python - <<'PY'
+          import json, pathlib, yaml
+          workflow_path = pathlib.Path(".github/workflows/mesin-cuan.yml")
+          document = yaml.load(workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+          if "workflow_dispatch" not in document.get("on", {}):
+              raise SystemExit("workflow_dispatch trigger missing")
+          if "push" not in document.get("on", {}):
+              raise SystemExit("safe push validation trigger missing")
+          for path in ("config/settings.json", "config/campaigns.json"):
+              json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+          print("PASS: GitHub Actions YAML and both JSON configuration files.")
+          PY
+          python -m compileall -q main.py engine
+          grep -q '^openai>=' requirements.txt
+          echo "PASS: Python syntax and NVIDIA OpenAI SDK dependency."
+
   run:
+    if: github.event_name == 'workflow_dispatch'
     name: Mesin Cuan / ${{ inputs.mode }} / ${{ inputs.channel }}
     runs-on: ubuntu-22.04
     timeout-minutes: 180

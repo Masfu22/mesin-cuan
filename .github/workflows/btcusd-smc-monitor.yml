@@ -1,0 +1,49 @@
+name: BTCUSD SMC Monitor
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: btcusd-smc-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    env:
+      TZ: Asia/Jakarta
+      PYTHONUNBUFFERED: "1"
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Restore alert deduplication state
+        uses: actions/cache/restore@v4
+        with:
+          path: .monitor_state/
+          key: btc-smc-state-${{ github.run_id }}
+          restore-keys: |
+            btc-smc-state-
+
+      - name: Run read-only BTC/USD SMC monitor
+        run: python trading_monitor/btc_smc_monitor.py
+
+      - name: Save alert deduplication state
+        if: always() && hashFiles('.monitor_state/btcusd_smc.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .monitor_state/
+          key: btc-smc-state-${{ github.run_id }}

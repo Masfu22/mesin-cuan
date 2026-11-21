@@ -182,20 +182,40 @@ jobs:
                   os.environ.get("NVIDIA_MODEL", "").strip() or "nvidia/nemotron-3.5-super-vl-120b-a12b",
                   quote_mode="always")
 
-          # Ollama Cloud is an additional provider after NVIDIA/Gemini/Groq.
-          # Its OpenAI-compatible endpoint requires /v1 for Provider-A.
+          # Ollama Cloud root URL is normalized to its OpenAI-compatible /v1 endpoint.
           ollama_key = os.environ.get("OLLAMA_API_KEY", "").strip()
           ollama_base = os.environ.get("OLLAMA_BASE_URL", "").strip().rstrip("/") or "https://ollama.com"
           ollama_model = os.environ.get("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
+          computed_env = {
+              "NVIDIA_BASE_URL": os.environ.get("NVIDIA_BASE_URL", "").strip() or "https://integrate.api.nvidia.com/v1",
+              "NVIDIA_MODEL": os.environ.get("NVIDIA_MODEL", "").strip() or "nvidia/nemotron-3.5-super-vl-120b-a12b",
+          }
           if ollama_key:
+              ollama_api_base = ollama_base if ollama_base.endswith("/v1") else ollama_base + "/v1"
               set_key(".env", "OLLAMA_BASE_URL", ollama_base, quote_mode="always")
               set_key(".env", "OLLAMA_MODEL", ollama_model, quote_mode="always")
-              if not os.environ.get("PROVIDER_A_API_KEY", "").strip():
-                  set_key(".env", "PROVIDER_A_API_KEY", ollama_key, quote_mode="always")
-              if not os.environ.get("PROVIDER_A_BASE_URL", "").strip():
-                  set_key(".env", "PROVIDER_A_BASE_URL", ollama_base + "/v1", quote_mode="always")
-              if not os.environ.get("PROVIDER_A_MODEL", "").strip():
-                  set_key(".env", "PROVIDER_A_MODEL", ollama_model, quote_mode="always")
+              provider_a_key = os.environ.get("PROVIDER_A_API_KEY", "").strip()
+              provider_a_base = os.environ.get("PROVIDER_A_BASE_URL", "").strip()
+              provider_a_model = os.environ.get("PROVIDER_A_MODEL", "").strip()
+              if not (provider_a_key and provider_a_base and provider_a_model):
+                  provider_a_key, provider_a_base, provider_a_model = ollama_key, ollama_api_base, ollama_model
+              computed_env.update({
+                  "OLLAMA_BASE_URL": ollama_base,
+                  "OLLAMA_MODEL": ollama_model,
+                  "PROVIDER_A_API_KEY": provider_a_key,
+                  "PROVIDER_A_BASE_URL": provider_a_base,
+                  "PROVIDER_A_MODEL": provider_a_model,
+              })
+          # Job-level empty values mask .env values, so export computed values to later steps.
+          github_env = os.environ.get("GITHUB_ENV")
+          if github_env:
+              with open(github_env, "a", encoding="utf-8") as handle:
+                  for name, value in computed_env.items():
+                      if value:
+                          handle.write("{}={}\n".format(name, value))
+          for name, value in computed_env.items():
+              if value:
+                  set_key(".env", name, value, quote_mode="always")
 
           set_key(".env", "TTS_MODE", "edge", quote_mode="always")
           set_key(".env", "RENDER_PRESET", "fast", quote_mode="always")

@@ -22,7 +22,8 @@ logger = get_logger("research_engine")
 PERPLEXITY_API_BASE = "https://api.perplexity.ai"
 PERPLEXITY_MODEL = os.environ.get("PERPLEXITY_MODEL", "perplexity/sonar")
 
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+_OLLAMA_BASE_RAW = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").strip().rstrip("/")
+OLLAMA_BASE_URL = _OLLAMA_BASE_RAW if _OLLAMA_BASE_RAW.endswith("/v1") else _OLLAMA_BASE_RAW + "/v1"
 
 RESEARCH_TIMEOUT = 30  # detik — cepat, jangan block pipeline terlalu lama
 MAX_CONTEXT_CHARS = 1800  # Batasi panjang context agar tidak membanjiri prompt

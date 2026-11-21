@@ -226,7 +226,7 @@ jobs:
           # Ollama Cloud root URL is normalized to its OpenAI-compatible /v1 endpoint.
           ollama_key = os.environ.get("OLLAMA_API_KEY", "").strip()
           ollama_base = os.environ.get("OLLAMA_BASE_URL", "").strip().rstrip("/") or "https://ollama.com"
-          ollama_model = os.environ.get("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
+          ollama_model = os.environ.get("OLLAMA_MODEL", "").strip() or "deepseek-v3.1"
           computed_env = {
               "NVIDIA_BASE_URL": os.environ.get("NVIDIA_BASE_URL", "").strip() or "https://integrate.api.nvidia.com/v1",
               "NVIDIA_MODEL": os.environ.get("NVIDIA_MODEL", "").strip() or "nvidia/nemotron-3.5-super-vl-120b-a12b",
@@ -436,7 +436,7 @@ jobs:
           else:
               try:
                   base = (os.getenv("OLLAMA_BASE_URL", "").strip() or "https://ollama.com").rstrip("/")
-                  model = os.getenv("OLLAMA_MODEL", "").strip() or "deepseek-v3.1:671b-cloud"
+                  model = os.getenv("OLLAMA_MODEL", "").strip() or "deepseek-v3.1"
                   payload = {"model":model,"messages":[{"role":"user","content":"Reply exactly OLLAMA_API_OK"}],"stream":False}
                   request = urllib.request.Request(
                       base + "/api/chat", data=json.dumps(payload).encode(),
